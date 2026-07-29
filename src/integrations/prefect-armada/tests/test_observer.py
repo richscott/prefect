@@ -2,9 +2,10 @@ import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
+import grpc
 import pytest
 from armada_client.armada import event_pb2
-from conftest import FakeEventStream, make_event
+from conftest import FakeEventStream, FakeRpcError, make_event
 from prefect_armada import observer
 from prefect_armada.credentials import ArmadaCredentials
 
@@ -328,6 +329,12 @@ class TestHandleEvent:
 
 
 class TestWatchJobSet:
+    @pytest.fixture(autouse=True)
+    def fast_retries(self, monkeypatch: pytest.MonkeyPatch):
+        """Keeps retry backoff from slowing the tests down."""
+        monkeypatch.setattr(observer, "WATCH_RETRY_MAX_ATTEMPTS", 3)
+        monkeypatch.setattr(observer, "WATCH_RETRY_MAX_DELAY_SECONDS", 0)
+
     async def test_watches_until_every_job_is_finished(
         self, mock_events_client, mock_armada_client, monkeypatch: pytest.MonkeyPatch
     ):
@@ -355,7 +362,31 @@ class TestWatchJobSet:
         mark_crashed.assert_awaited_once()
         mock_armada_client.unwatch_events.assert_called_once_with(stream)
 
-    async def test_stream_errors_do_not_raise(
+    async def test_retries_a_job_set_that_is_not_visible_yet(
+        self, mock_events_client, mock_armada_client, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Armada makes a job set visible shortly after its first submission."""
+        mark_crashed = AsyncMock()
+        monkeypatch.setattr(observer, "_mark_flow_run_as_crashed", mark_crashed)
+        mock_armada_client.get_job_events_stream.side_effect = [
+            FakeRpcError(grpc.StatusCode.NOT_FOUND, "Jobset does not exist"),
+            FakeEventStream(
+                [
+                    make_event(
+                        "submitted", job_id="job-1", annotations=PREFECT_ANNOTATIONS
+                    ),
+                    make_event("succeeded", job_id="job-1", message_id="2"),
+                ],
+                hang=True,
+            ),
+        ]
+
+        await observer._watch_job_set(ArmadaCredentials(), "my-queue", "my-job-set")
+
+        assert mock_armada_client.get_job_events_stream.await_count == 2
+        assert mock_events_client.emit.await_count == 2
+
+    async def test_gives_up_after_the_retry_limit(
         self, mock_events_client, mock_armada_client
     ):
         mock_armada_client.get_job_events_stream.side_effect = RuntimeError(
@@ -363,6 +394,9 @@ class TestWatchJobSet:
         )
 
         await observer._watch_job_set(ArmadaCredentials(), "my-queue", "my-job-set")
+
+        # 3 attempts, per the `fast_retries` fixture
+        assert mock_armada_client.get_job_events_stream.await_count == 3
 
 
 class TestMarkFlowRunAsCrashed:

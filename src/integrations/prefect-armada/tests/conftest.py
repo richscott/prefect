@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock
 
+import grpc
 import pytest
 import yaml
 from armada_client.armada import event_pb2, job_pb2, submit_pb2
@@ -108,6 +109,20 @@ def make_event(
 
     message = event_pb2.EventMessage(**{event_type: event_cls(job_id=job_id, **fields)})
     return Event(event_pb2.EventStreamMessage(id=message_id, message=message))
+
+
+class FakeRpcError(grpc.RpcError):
+    """A gRPC error with a status code and details, like the real client raises."""
+
+    def __init__(self, code: grpc.StatusCode, details: str = ""):
+        self._code = code
+        self._details = details
+
+    def code(self) -> grpc.StatusCode:
+        return self._code
+
+    def details(self) -> str:
+        return self._details
 
 
 class FakeEventStream:
