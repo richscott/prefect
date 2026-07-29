@@ -5,7 +5,7 @@ import anyio.abc
 import grpc
 import pytest
 from armada_client.armada import submit_pb2
-from conftest import make_job_submit_response
+from conftest import FakeRpcError, make_job_submit_response
 from prefect_armada import ArmadaWorker
 from prefect_armada.credentials import ArmadaClusterConfig, ArmadaCredentials
 from prefect_armada.worker import ArmadaWorkerJobConfiguration
@@ -14,20 +14,6 @@ from pydantic import ValidationError
 from prefect.client.schemas import FlowRun
 from prefect.exceptions import InfrastructureError, InfrastructureNotFound
 from prefect.utilities.dockerutils import get_prefect_image_name
-
-
-class FakeRpcError(grpc.RpcError):
-    """A gRPC error with a status code and details, like the real client raises."""
-
-    def __init__(self, code: grpc.StatusCode, details: str = ""):
-        self._code = code
-        self._details = details
-
-    def code(self):
-        return self._code
-
-    def details(self):
-        return self._details
 
 
 @pytest.fixture(autouse=True)
@@ -351,6 +337,24 @@ class TestArmadaWorker:
                 InfrastructureError, match="Verify that the queue 'prefect' exists"
             ):
                 await worker.run(flow_run=flow_run, configuration=default_configuration)
+
+    async def test_raises_infrastructure_error_with_a_hint_for_mismatched_resources(
+        self, default_configuration, flow_run, mock_armada_client
+    ):
+        # Armada rejects a container whose requests and limits differ.
+        mock_armada_client.submit_jobs.side_effect = FakeRpcError(
+            grpc.StatusCode.INVALID_ARGUMENT,
+            "container prefect-job defines different resources for requests and limits",
+        )
+        default_configuration.prepare_for_flow_run(flow_run)
+
+        async with ArmadaWorker(work_pool_name="test") as worker:
+            with pytest.raises(
+                InfrastructureError, match="requests to equal its limits"
+            ):
+                await worker.run(
+                    flow_run=flow_run, configuration=default_configuration
+                )
 
     async def test_retries_job_submission(
         self, default_configuration, flow_run, mock_armada_client, monkeypatch

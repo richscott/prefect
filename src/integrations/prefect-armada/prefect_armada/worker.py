@@ -921,6 +921,12 @@ class ArmadaWorker(
         status_code = rpc_status_code(exc)
         details = rpc_details(exc).lower()
 
+        if "requests and limits" in details:
+            return (
+                "Armada requires a container's resource requests to equal its "
+                "limits; set matching values for the cpu and memory variables."
+            )
+
         if "quota" in details or "exceeded" in details:
             return (
                 "Check the resource limits for the queue and ensure the job does "

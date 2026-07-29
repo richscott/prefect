@@ -54,6 +54,12 @@ logger = get_logger("prefect_armada.observer")
 # Armada event types after which a job will never run again.
 TERMINAL_EVENT_TYPES = {"succeeded", "failed", "cancelled", "preempted"}
 
+# How many times to (re)connect to a job set's event stream before giving up,
+# and the ceiling on the exponential backoff between attempts. Eight attempts
+# with this backoff spans a little over two minutes.
+WATCH_RETRY_MAX_ATTEMPTS = 8
+WATCH_RETRY_MAX_DELAY_SECONDS = 30
+
 # Cache used to keep track of the last event for a job. This is used to populate
 # the `follows` field on events to get correct event ordering. We only hold each
 # job's last event for 5 minutes to avoid holding onto too much memory, and 5
@@ -165,31 +171,64 @@ async def _watch_job_set(
     """
     logger.debug("Watching Armada job set %r in queue %r", job_set_id, queue)
     state = _JobSetWatchState()
-    try:
-        async with aclosing(
-            stream_job_set_events(
-                armada_credentials=credentials,
-                queue=queue,
-                job_set_id=job_set_id,
+
+    # A watch usually starts moments after the job set's first job is submitted,
+    # before Armada has made the job set visible to the event service, so the
+    # first attempts routinely fail with NOT_FOUND. Retrying with backoff is
+    # what keeps a flow run's job set from going unobserved.
+    for attempt in range(1, WATCH_RETRY_MAX_ATTEMPTS + 1):
+        try:
+            async with aclosing(
+                stream_job_set_events(
+                    armada_credentials=credentials,
+                    queue=queue,
+                    job_set_id=job_set_id,
+                )
+            ) as event_stream:
+                async for event in event_stream:
+                    # The stream is working, so later failures get a full set of
+                    # retries of their own.
+                    attempt = 1
+                    await _handle_event(event, queue, job_set_id, state, credentials)
+                    if state.is_finished:
+                        logger.debug(
+                            "Finished watching Armada job set %r in queue %r",
+                            job_set_id,
+                            queue,
+                        )
+                        return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if attempt >= WATCH_RETRY_MAX_ATTEMPTS:
+                logger.warning(
+                    "Giving up watching Armada job set %r in queue %r after %s "
+                    "attempts",
+                    job_set_id,
+                    queue,
+                    attempt,
+                    exc_info=True,
+                )
+                return
+            delay = min(2 ** (attempt - 1), WATCH_RETRY_MAX_DELAY_SECONDS)
+            logger.debug(
+                "Error watching Armada job set %r in queue %r (%s); retrying in "
+                "%ss",
+                job_set_id,
+                queue,
+                exc,
+                delay,
             )
-        ) as event_stream:
-            async for event in event_stream:
-                await _handle_event(event, queue, job_set_id, state, credentials)
-                if state.is_finished:
-                    break
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.warning(
-            "Error while watching Armada job set %r in queue %r",
-            job_set_id,
-            queue,
-            exc_info=True,
-        )
-    else:
-        logger.debug(
-            "Finished watching Armada job set %r in queue %r", job_set_id, queue
-        )
+            await asyncio.sleep(delay)
+        else:
+            # The stream ended without the job set finishing, e.g. Armada closed
+            # it; reconnect to pick up where it left off.
+            logger.debug(
+                "Event stream for Armada job set %r in queue %r ended; reconnecting",
+                job_set_id,
+                queue,
+            )
+            await asyncio.sleep(min(2 ** (attempt - 1), WATCH_RETRY_MAX_DELAY_SECONDS))
 
 
 async def _handle_event(
