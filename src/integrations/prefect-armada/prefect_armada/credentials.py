@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from datetime import timedelta
-from typing import Any, AsyncGenerator, Dict, Generator, Optional, Type, Union
+from typing import Any
 
 import grpc
 from armada_client.asyncio_client import ArmadaAsyncIOClient
@@ -22,7 +23,7 @@ from prefect.blocks.core import Block
 from prefect_armada.settings import ArmadaSettings
 from prefect_armada.utilities import _grpc_keepalive_options
 
-ArmadaClientType = Union[ArmadaClient, ArmadaAsyncIOClient]
+ArmadaClientType = ArmadaClient | ArmadaAsyncIOClient
 
 
 class _BearerAuth(grpc.AuthMetadataPlugin):
@@ -56,7 +57,7 @@ class _BasicAuth(grpc.AuthMetadataPlugin):
     ) -> None:
         """Sends the encoded credentials to gRPC as request metadata."""
         encoded = base64.b64encode(
-            f"{self._username}:{self._password}".encode("utf-8")
+            f"{self._username}:{self._password}".encode()
         ).decode("ascii")
         callback((("authorization", f"basic {encoded}"),), None)
 
@@ -84,7 +85,7 @@ class ArmadaClusterConfig(Block):
     """
 
     _block_type_name = "Armada Cluster Config"
-    _documentation_url = "https://docs.prefect.io/integrations/prefect-armada"  # noqa
+    _documentation_url = "https://docs.prefect.io/integrations/prefect-armada"
 
     host: str = Field(
         default="localhost",
@@ -98,14 +99,14 @@ class ArmadaClusterConfig(Block):
         default=False,
         description="Whether to connect to Armada without TLS.",
     )
-    root_certificates: Optional[SecretStr] = Field(
+    root_certificates: SecretStr | None = Field(
         default=None,
         description=(
             "PEM-encoded root certificates used to verify the Armada server's "
             "TLS certificate. If not provided, gRPC's default roots are used."
         ),
     )
-    binoculars_host: Optional[str] = Field(
+    binoculars_host: str | None = Field(
         default=None,
         description=(
             "The hostname of Armada's Binoculars gRPC endpoint, which serves job "
@@ -118,7 +119,7 @@ class ArmadaClusterConfig(Block):
             "The port of Armada's Binoculars gRPC endpoint, which serves job logs."
         ),
     )
-    channel_options: Dict[str, Any] = Field(
+    channel_options: dict[str, Any] = Field(
         default_factory=dict,
         title="Channel Options",
         description="Additional gRPC channel options to use when connecting to Armada.",
@@ -140,7 +141,7 @@ class ArmadaClusterConfig(Block):
     )
 
     @classmethod
-    def from_env(cls: Type[Self]) -> Self:
+    def from_env(cls: type[Self]) -> Self:
         """
         Create a cluster config from the current environment.
 
@@ -178,8 +179,8 @@ class ArmadaClusterConfig(Block):
         return options
 
     def get_channel_credentials(
-        self, call_credentials: Optional[grpc.CallCredentials] = None
-    ) -> Optional[grpc.ChannelCredentials]:
+        self, call_credentials: grpc.CallCredentials | None = None
+    ) -> grpc.ChannelCredentials | None:
         """
         Returns the gRPC channel credentials for this cluster config.
 
@@ -233,11 +234,11 @@ class ArmadaCredentials(Block):
     """
 
     _block_type_name = "Armada Credentials"
-    _documentation_url = "https://docs.prefect.io/integrations/prefect-armada"  # noqa
+    _documentation_url = "https://docs.prefect.io/integrations/prefect-armada"
 
-    cluster_config: Optional[ArmadaClusterConfig] = None
+    cluster_config: ArmadaClusterConfig | None = None
 
-    token: Optional[SecretStr] = Field(
+    token: SecretStr | None = Field(
         default=None,
         description=(
             "A bearer token to authenticate with Armada. The token is sent verbatim "
@@ -245,11 +246,11 @@ class ArmadaCredentials(Block):
             "if the Armada server expects one."
         ),
     )
-    username: Optional[str] = Field(
+    username: str | None = Field(
         default=None,
         description="The username to authenticate with Armada using basic auth.",
     )
-    password: Optional[SecretStr] = Field(
+    password: SecretStr | None = Field(
         default=None,
         description="The password to authenticate with Armada using basic auth.",
     )
@@ -265,7 +266,7 @@ class ArmadaCredentials(Block):
             return self.cluster_config
         return ArmadaClusterConfig.from_env()
 
-    def get_call_credentials(self) -> Optional[grpc.CallCredentials]:
+    def get_call_credentials(self) -> grpc.CallCredentials | None:
         """
         Returns the gRPC call credentials for this credentials block.
 

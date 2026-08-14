@@ -545,8 +545,20 @@ class TestFetchCrashedJobLogs:
 
         assert lines == ["line two"]
 
-    async def test_returns_none_when_logs_are_unavailable(self, mock_binoculars_client):
-        mock_binoculars_client.logs.side_effect = RuntimeError("pod is gone")
+    @pytest.mark.parametrize(
+        "status_code,details",
+        [
+            (grpc.StatusCode.NOT_FOUND, "pod is gone"),
+            (grpc.StatusCode.UNAVAILABLE, "connection refused"),
+        ],
+    )
+    async def test_returns_none_when_logs_are_unavailable(
+        self,
+        mock_binoculars_client,
+        status_code: grpc.StatusCode,
+        details: str,
+    ):
+        mock_binoculars_client.logs.side_effect = FakeRpcError(status_code, details)
 
         lines = await observer._fetch_crashed_job_logs(
             flow_run_id=FLOW_RUN_ID,

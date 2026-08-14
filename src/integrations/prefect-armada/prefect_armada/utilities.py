@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Optional, Union
+from collections.abc import Iterable
+from typing import Any
 
 from armada_client.armada import submit_pb2
 from armada_client.k8s.io.api.core.v1 import generated_pb2 as core_v1
@@ -59,7 +60,7 @@ def _grpc_keepalive_options() -> list[tuple[str, Any]]:
     ]
 
 
-def _slugify_name(name: str, max_length: int = 45) -> Optional[str]:
+def _slugify_name(name: str, max_length: int = 45) -> str | None:
     """
     Slugify text for use as a name.
 
@@ -102,7 +103,7 @@ def _slugify_label_key(key: str, max_length: int = 63, prefix_max_length=253) ->
 
     Returns:
         The slugified label key
-    """  # noqa
+    """
     if "/" in key:
         prefix, name = key.split("/", maxsplit=1)
     else:
@@ -153,7 +154,7 @@ def _slugify_label_value(value: str, max_length: int = 63) -> str:
 
     Returns:
         The slugified value
-    """  # noqa
+    """
     slug = (
         slugify(
             value,
@@ -171,7 +172,7 @@ def _slugify_label_value(value: str, max_length: int = 63) -> str:
     return slug
 
 
-def _field_by_name(descriptor: Descriptor, key: str) -> Optional[FieldDescriptor]:
+def _field_by_name(descriptor: Descriptor, key: str) -> FieldDescriptor | None:
     """Looks up a protobuf field by either its proto name or its JSON name."""
     field = descriptor.fields_by_name.get(key)
     if field is not None:
@@ -335,11 +336,9 @@ def job_request_item_from_dict(
 
 
 def coerce_job_request_items(
-    job_request: Union[
-        dict[str, Any],
-        submit_pb2.JobSubmitRequestItem,
-        list[Union[dict[str, Any], submit_pb2.JobSubmitRequestItem]],
-    ],
+    job_request: dict[str, Any]
+    | submit_pb2.JobSubmitRequestItem
+    | list[dict[str, Any] | submit_pb2.JobSubmitRequestItem],
 ) -> list[submit_pb2.JobSubmitRequestItem]:
     """Coerces job request input into a list of job submit request items.
 
@@ -381,7 +380,7 @@ def queue_from_dict(queue: dict[str, Any]) -> submit_pb2.Queue:
 
 
 def coerce_queues(
-    queues: Iterable[Union[dict[str, Any], submit_pb2.Queue]],
+    queues: Iterable[dict[str, Any] | submit_pb2.Queue],
 ) -> list[submit_pb2.Queue]:
     """Coerces queue input into a list of Armada queues.
 

@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import grpc
@@ -36,7 +36,7 @@ def prefect_db():
         if "Directory not empty" in str(e):
             pass
         else:
-            raise e
+            raise
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -87,7 +87,7 @@ def make_event(
     event_type: str,
     job_id: str = "test-job-id",
     message_id: str = "1",
-    annotations: Optional[dict] = None,
+    annotations: dict | None = None,
     **fields: Any,
 ) -> Event:
     """Builds an Armada `Event` of the given type."""

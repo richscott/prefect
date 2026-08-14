@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import grpc
 
 
@@ -27,7 +25,7 @@ class ArmadaJobTimeoutError(ArmadaError):
     """An exception for when an Armada job times out."""
 
 
-def rpc_status_code(exc: BaseException) -> Optional[grpc.StatusCode]:
+def rpc_status_code(exc: BaseException) -> grpc.StatusCode | None:
     """Returns the gRPC status code for an exception, if it has one.
 
     Both `grpc.RpcError` (sync) and `grpc.aio.AioRpcError` (async) expose a
@@ -45,7 +43,7 @@ def rpc_status_code(exc: BaseException) -> Optional[grpc.StatusCode]:
         return None
     try:
         status_code = code()
-    except Exception:
+    except NotImplementedError:
         return None
     return status_code if isinstance(status_code, grpc.StatusCode) else None
 
@@ -64,5 +62,5 @@ def rpc_details(exc: BaseException) -> str:
         return ""
     try:
         return details() or ""
-    except Exception:
+    except NotImplementedError:
         return ""

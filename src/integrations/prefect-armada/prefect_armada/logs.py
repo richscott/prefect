@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from anyio.to_thread import run_sync
 from armada_client.log_client import LogLine
@@ -33,7 +33,7 @@ def _read_log_lines(
 async def read_job_log_lines(
     armada_credentials: ArmadaCredentials,
     job_id: str,
-    namespace: Optional[str] = "default",
+    namespace: str | None = "default",
     pod_number: int = 0,
     since_time: str = "",
 ) -> list[LogLine]:
@@ -82,10 +82,10 @@ async def read_job_log_lines(
 async def read_job_log(
     armada_credentials: ArmadaCredentials,
     job_id: str,
-    namespace: Optional[str] = "default",
+    namespace: str | None = "default",
     pod_number: int = 0,
     since_time: str = "",
-    print_func: Optional[Callable] = None,
+    print_func: Callable | None = None,
 ) -> str:
     """Task for reading the logs of an Armada job.
 

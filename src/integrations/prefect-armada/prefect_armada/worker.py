@@ -85,16 +85,13 @@ checkout out the [Prefect docs](https://docs.prefect.io/concepts/work-pools/).
 from __future__ import annotations
 
 import enum
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
-    Dict,
-    List,
-    Optional,
+    Literal,
     TypeVar,
-    Union,
 )
 
 import anyio
@@ -104,7 +101,7 @@ from armada_client.asyncio_client import ArmadaAsyncIOClient
 from jsonpatch import JsonPatch
 from pydantic import Field, field_validator, model_validator
 from tenacity import AsyncRetrying, stop_after_attempt, wait_fixed, wait_random
-from typing_extensions import Literal, Self
+from typing_extensions import Self
 
 import prefect
 from prefect.client.schemas.objects import Flow as APIFlow
@@ -147,7 +144,7 @@ R = TypeVar("R")
 EXTERNAL_JOB_URI_FIELD = "externalJobUri"
 
 
-def _get_default_job_manifest_template() -> Dict[str, Any]:
+def _get_default_job_manifest_template() -> dict[str, Any]:
     """Returns the default job manifest template used by the Armada worker."""
     return {
         "priority": "{{ priority }}",
@@ -180,7 +177,7 @@ def _get_default_job_manifest_template() -> Dict[str, Any]:
     }
 
 
-def _get_base_job_manifest() -> Dict[str, Any]:
+def _get_base_job_manifest() -> dict[str, Any]:
     """Returns a base job manifest to use for manifest validation."""
     return {
         "labels": {},
@@ -231,7 +228,7 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
         stream_output: Whether or not to stream the job's output.
     """
 
-    annotations: Dict[str, str] = Field(
+    annotations: dict[str, str] = Field(
         default_factory=dict,
         description=(
             "Annotations applied to infrastructure created by the worker using "
@@ -239,22 +236,20 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
         ),
     )
     queue: str = Field(default="prefect")
-    job_set_id: Optional[str] = Field(default=None)
+    job_set_id: str | None = Field(default=None)
     namespace: str = Field(default="default")
-    job_manifest: Dict[str, Any] = Field(
-        json_schema_extra=dict(template=_get_default_job_manifest_template())
+    job_manifest: dict[str, Any] = Field(
+        json_schema_extra={"template": _get_default_job_manifest_template()}
     )
-    cluster_config: Optional[ArmadaClusterConfig] = Field(default=None)
-    credentials: Optional[ArmadaCredentials] = Field(default=None)
-    job_watch_timeout_seconds: Optional[int] = Field(default=None)
+    cluster_config: ArmadaClusterConfig | None = Field(default=None)
+    credentials: ArmadaCredentials | None = Field(default=None)
+    job_watch_timeout_seconds: int | None = Field(default=None)
     stream_output: bool = Field(default=True)
 
-    env: Union[Dict[str, Optional[str]], List[Dict[str, Any]]] = Field(
-        default_factory=dict
-    )
+    env: dict[str, str | None] | list[dict[str, Any]] = Field(default_factory=dict)
 
     # internal-use only
-    _api_dns_name: Optional[str] = None  # Replaces 'localhost' in API URL
+    _api_dns_name: str | None = None  # Replaces 'localhost' in API URL
 
     @field_validator("job_manifest", mode="before")
     @classmethod
@@ -321,7 +316,7 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
         return {k: str(v) if v is not None else None for k, v in v.items()}
 
     @staticmethod
-    def _base_flow_run_labels(flow_run: "FlowRun") -> Dict[str, str]:
+    def _base_flow_run_labels(flow_run: FlowRun) -> dict[str, str]:
         """
         Generate a dictionary of labels for a flow run job.
         """
@@ -336,7 +331,7 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
         }
 
     @staticmethod
-    def _base_flow_labels(flow: "APIFlow | None") -> Dict[str, str]:
+    def _base_flow_labels(flow: APIFlow | None) -> dict[str, str]:
         """
         Generate a dictionary of labels for a flow run job, including standard
         app.kubernetes.io labels.
@@ -348,8 +343,8 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
 
     @staticmethod
     def _base_deployment_labels(
-        deployment: "DeploymentResponse | None",
-    ) -> Dict[str, str]:
+        deployment: DeploymentResponse | None,
+    ) -> dict[str, str]:
         """
         Generate a dictionary of labels for a deployment, including standard
         app.kubernetes.io labels.
@@ -360,7 +355,7 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
         return labels
 
     @property
-    def container(self) -> Dict[str, Any]:
+    def container(self) -> dict[str, Any]:
         """The first container in the job manifest's pod spec."""
         return self.job_manifest["podSpec"]["containers"][0]
 
@@ -401,12 +396,12 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
 
     def prepare_for_flow_run(
         self,
-        flow_run: "FlowRun",
-        deployment: "DeploymentResponse | None" = None,
-        flow: "APIFlow | None" = None,
-        work_pool: "WorkPool | None" = None,
+        flow_run: FlowRun,
+        deployment: DeploymentResponse | None = None,
+        flow: APIFlow | None = None,
+        work_pool: WorkPool | None = None,
         worker_name: str | None = None,
-        worker_id: "UUID | None" = None,
+        worker_id: UUID | None = None,
     ):
         """
         Prepares the job configuration for a flow run.
@@ -586,7 +581,7 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
         if not self.job_manifest.get("namespace"):
             self.job_manifest["namespace"] = self.namespace or "default"
 
-    def _populate_external_job_uri(self, flow_run: "FlowRun"):
+    def _populate_external_job_uri(self, flow_run: FlowRun):
         """Records the flow run as the job's external owner.
 
         Armada indexes `externalJobUri`, so this allows the Armada job for a flow
@@ -597,7 +592,7 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
                 f"prefect://flow-run/{flow_run.id}"
             )
 
-    def _populate_job_set_id_if_not_present(self, flow_run: "FlowRun"):
+    def _populate_job_set_id_if_not_present(self, flow_run: FlowRun):
         """Ensures that a job set ID is set for this flow run.
 
         Each flow run gets its own job set so that the observer's watch of the
@@ -616,7 +611,7 @@ class ArmadaWorkerVariables(BaseVariables):
     default base job template.
     """
 
-    annotations: Dict[str, str] = Field(
+    annotations: dict[str, str] = Field(
         default_factory=dict,
         description="Annotations applied to Armada jobs created by the worker.",
     )
@@ -625,7 +620,7 @@ class ArmadaWorkerVariables(BaseVariables):
         description="The Armada queue to submit jobs to. The queue must already "
         "exist and the worker's credentials must be permitted to submit to it.",
     )
-    job_set_id: Optional[str] = Field(
+    job_set_id: str | None = Field(
         default=None,
         title="Job Set ID",
         description="The Armada job set to submit jobs to. If not set, each flow "
@@ -641,13 +636,13 @@ class ArmadaWorkerVariables(BaseVariables):
         description="The Armada priority of created jobs. Lower values are "
         "scheduled first.",
     )
-    image: Optional[str] = Field(
+    image: str | None = Field(
         default=None,
         description="The image reference of a container image to use for created jobs. "
         "If not set, the latest Prefect image will be used.",
         examples=["docker.io/prefecthq/prefect:3-latest"],
     )
-    service_account_name: Optional[str] = Field(
+    service_account_name: str | None = Field(
         default=None,
         description="The Kubernetes service account to use for created jobs.",
     )
@@ -655,7 +650,7 @@ class ArmadaWorkerVariables(BaseVariables):
         default=ArmadaImagePullPolicy.IF_NOT_PRESENT,
         description="The Kubernetes image pull policy to use for job containers.",
     )
-    job_watch_timeout_seconds: Optional[int] = Field(
+    job_watch_timeout_seconds: int | None = Field(
         default=None,
         description=(
             "Number of seconds to wait for each event emitted by a job before "
@@ -668,15 +663,15 @@ class ArmadaWorkerVariables(BaseVariables):
             "If set, output will be streamed from the job to local standard output."
         ),
     )
-    cluster_config: Optional[ArmadaClusterConfig] = Field(
+    cluster_config: ArmadaClusterConfig | None = Field(
         default=None,
         description="The Armada cluster config to use for job submission.",
     )
-    credentials: Optional[ArmadaCredentials] = Field(
+    credentials: ArmadaCredentials | None = Field(
         default=None,
         description="The Armada credentials to use for job submission.",
     )
-    cpu_request: Optional[str] = Field(
+    cpu_request: str | None = Field(
         default=None,
         title="CPU Request",
         description=(
@@ -685,7 +680,7 @@ class ArmadaWorkerVariables(BaseVariables):
             " CPUs). If not provided, no CPU request is configured."
         ),
     )
-    cpu_limit: Optional[str] = Field(
+    cpu_limit: str | None = Field(
         default=None,
         title="CPU Limit",
         description=(
@@ -694,7 +689,7 @@ class ArmadaWorkerVariables(BaseVariables):
             " CPUs). If not provided, no CPU limit is configured."
         ),
     )
-    memory_request: Optional[str] = Field(
+    memory_request: str | None = Field(
         default=None,
         title="Memory Request",
         description=(
@@ -703,7 +698,7 @@ class ArmadaWorkerVariables(BaseVariables):
             " memory request is configured."
         ),
     )
-    memory_limit: Optional[str] = Field(
+    memory_limit: str | None = Field(
         default=None,
         title="Memory Limit",
         description=(
@@ -739,7 +734,7 @@ class ArmadaWorker(
 
     async def _initiate_run(
         self,
-        flow_run: "FlowRun",
+        flow_run: FlowRun,
         configuration: ArmadaWorkerJobConfiguration,
     ) -> None:
         """
@@ -758,7 +753,7 @@ class ArmadaWorker(
 
     async def run(
         self,
-        flow_run: "FlowRun",
+        flow_run: FlowRun,
         configuration: ArmadaWorkerJobConfiguration,
         task_status: anyio.abc.TaskStatus[str] | None = None,
     ) -> ArmadaWorkerResult:
@@ -844,7 +839,7 @@ class ArmadaWorker(
     @asynccontextmanager
     async def _get_configured_armada_client(
         self, configuration: ArmadaWorkerJobConfiguration
-    ) -> AsyncGenerator["ArmadaAsyncIOClient", None]:
+    ) -> AsyncGenerator[ArmadaAsyncIOClient, None]:
         """
         Returns a configured Armada client.
         """
@@ -855,7 +850,7 @@ class ArmadaWorker(
     async def _submit_job(
         self,
         configuration: ArmadaWorkerJobConfiguration,
-        client: "ArmadaAsyncIOClient",
+        client: ArmadaAsyncIOClient,
     ) -> str:
         """
         Submits an Armada job from a job manifest and returns its job ID.
@@ -959,7 +954,7 @@ class ArmadaWorker(
             start_observer()
         return await super().__aenter__()
 
-    async def __aexit__(self, *exc_info: Any):
+    async def __aexit__(self, *exc_info: object):
         """Stops the Armada observer when the worker shuts down."""
         try:
             await super().__aexit__(*exc_info)

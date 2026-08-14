@@ -25,9 +25,10 @@ import threading
 import uuid
 from contextlib import aclosing
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any
 
 import anyio
+import grpc
 from anyio.to_thread import run_sync
 from armada_client.event import Event as ArmadaEvent
 from cachetools import TTLCache
@@ -46,6 +47,7 @@ from prefect.utilities.engine import propose_state
 from prefect.utilities.slugify import slugify
 from prefect_armada.credentials import ArmadaCredentials
 from prefect_armada.events import stream_job_set_events
+from prefect_armada.exceptions import rpc_details, rpc_status_code
 from prefect_armada.settings import ArmadaSettings
 from prefect_armada.utilities import UNSUCCESSFUL_EVENT_TYPES
 
@@ -212,8 +214,7 @@ async def _watch_job_set(
                 return
             delay = min(2 ** (attempt - 1), WATCH_RETRY_MAX_DELAY_SECONDS)
             logger.debug(
-                "Error watching Armada job set %r in queue %r (%s); retrying in "
-                "%ss",
+                "Error watching Armada job set %r in queue %r (%s); retrying in %ss",
                 job_set_id,
                 queue,
                 exc,
@@ -282,7 +283,7 @@ async def _handle_event(
         )
 
 
-def _event_occurred(message: Any) -> Optional[datetime]:
+def _event_occurred(message: Any) -> datetime | None:
     """Returns the time an Armada event occurred, if it reports one."""
     created = getattr(message, "created", None)
     if created is None:
@@ -359,15 +360,14 @@ async def _replicate_job_event(
         **({"occurred": occurred} if occurred else {}),
     )
 
-    if (prev_event := _last_event_cache.get(job_id)) is not None:
-        # This check replicates a similar check in `emit_event` in
-        # `prefect.events.utilities`
-        if (
-            -timedelta(minutes=5)
-            < (prefect_event.occurred - prev_event.occurred)
-            < timedelta(minutes=5)
-        ):
-            prefect_event.follows = prev_event.id
+    # This check replicates a similar check in `emit_event` in
+    # `prefect.events.utilities`
+    if ((prev_event := _last_event_cache.get(job_id)) is not None) and (
+        -timedelta(minutes=5)
+        < (prefect_event.occurred - prev_event.occurred)
+        < timedelta(minutes=5)
+    ):
+        prefect_event.follows = prev_event.id
 
     await events_client.emit(event=prefect_event)
     _last_event_cache[job_id] = prefect_event
@@ -565,14 +565,19 @@ async def _fetch_crashed_job_logs(
     """Fetches the tail of an Armada job's logs, if they are still available."""
     settings = ArmadaSettings()
 
+    # Logs are a best-effort addition to the crash report. Binoculars rejects the
+    # request once the job's pod is gone (NOT_FOUND) and is unreachable when it
+    # is not deployed alongside Armada (UNAVAILABLE), neither of which should
+    # stop the flow run from being marked as crashed.
     try:
         lines = await run_sync(_read_job_log_lines, credentials, job_id, namespace)
-    except Exception as exc:
+    except grpc.RpcError as exc:
         logger.debug(
-            "Could not fetch logs for Armada job %s of flow run %s: %s",
+            "Could not fetch logs for Armada job %s of flow run %s: %s %s",
             job_id,
             flow_run_id,
-            exc,
+            rpc_status_code(exc),
+            rpc_details(exc),
         )
         return None
 
@@ -661,7 +666,7 @@ def _observer_thread_entry(settings_context: SettingsContext) -> None:
         ):
             asyncio.run(_observer_main())
     except Exception:
-        logger.error("Armada observer stopped unexpectedly", exc_info=True)
+        logger.exception("Armada observer stopped unexpectedly")
     finally:
         # Ensure a caller waiting on startup is never blocked by a failure here.
         if _ready_flag is not None:

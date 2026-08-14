@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import Annotated, Optional, Union
+from typing import Annotated
 
 from pydantic import AliasChoices, AliasPath, BeforeValidator, Field, SecretStr
 
@@ -9,7 +9,7 @@ from prefect.settings.base import PrefectBaseSettings, build_settings_config
 from prefect.types import validate_set_T_from_delim_string
 
 JobSets = Annotated[
-    Union[set[str], str, None],
+    set[str] | str | None,
     BeforeValidator(partial(validate_set_T_from_delim_string, type_=str)),
 ]
 
@@ -54,7 +54,7 @@ class ArmadaConnectionSettings(PrefectBaseSettings):
         ),
     )
 
-    binoculars_host: Optional[str] = Field(
+    binoculars_host: str | None = Field(
         default=None,
         description="The hostname of Armada's Binoculars gRPC endpoint, which "
         "serves job logs. Defaults to the Armada server host.",
@@ -65,19 +65,19 @@ class ArmadaConnectionSettings(PrefectBaseSettings):
         description="The port of Armada's Binoculars gRPC endpoint, which serves job logs.",
     )
 
-    token: Optional[SecretStr] = Field(
+    token: SecretStr | None = Field(
         default=None,
         description="A bearer token to authenticate with Armada. The token is sent "
         "verbatim in the `authorization` header, so it should not include the "
         "`Bearer` prefix.",
     )
 
-    username: Optional[str] = Field(
+    username: str | None = Field(
         default=None,
         description="The username to authenticate with Armada using basic auth.",
     )
 
-    password: Optional[SecretStr] = Field(
+    password: SecretStr | None = Field(
         default=None,
         description="The password to authenticate with Armada using basic auth.",
     )
@@ -189,7 +189,7 @@ class ArmadaSettings(PrefectBaseSettings):
 
     model_config = build_settings_config(("integrations", "armada"))
 
-    cluster_uid: Optional[str] = Field(
+    cluster_uid: str | None = Field(
         default=None,
         description="A unique identifier for the Armada cluster being used.",
     )

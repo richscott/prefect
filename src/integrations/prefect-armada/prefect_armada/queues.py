@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence, Union
+from collections.abc import Sequence
+from typing import Any
 
 from armada_client.armada import submit_pb2
 from armada_client.permissions import Permissions
@@ -14,11 +15,11 @@ from prefect_armada.utilities import coerce_queues
 
 def _build_queue(
     name: str,
-    priority_factor: Optional[float] = None,
-    user_owners: Optional[List[str]] = None,
-    group_owners: Optional[List[str]] = None,
-    resource_limits: Optional[Dict[str, float]] = None,
-    permissions: Optional[List[Permissions]] = None,
+    priority_factor: float | None = None,
+    user_owners: list[str] | None = None,
+    group_owners: list[str] | None = None,
+    resource_limits: dict[str, float] | None = None,
+    permissions: list[Permissions] | None = None,
 ) -> submit_pb2.Queue:
     """Builds an Armada `Queue` message from its component parts."""
     return submit_pb2.Queue(
@@ -35,11 +36,11 @@ def _build_queue(
 async def create_queue(
     armada_credentials: ArmadaCredentials,
     name: str,
-    priority_factor: Optional[float] = None,
-    user_owners: Optional[List[str]] = None,
-    group_owners: Optional[List[str]] = None,
-    resource_limits: Optional[Dict[str, float]] = None,
-    permissions: Optional[List[Permissions]] = None,
+    priority_factor: float | None = None,
+    user_owners: list[str] | None = None,
+    group_owners: list[str] | None = None,
+    resource_limits: dict[str, float] | None = None,
+    permissions: list[Permissions] | None = None,
 ) -> Any:
     """Task for creating an Armada queue.
 
@@ -89,11 +90,11 @@ async def create_queue(
 async def update_queue(
     armada_credentials: ArmadaCredentials,
     name: str,
-    priority_factor: Optional[float] = None,
-    user_owners: Optional[List[str]] = None,
-    group_owners: Optional[List[str]] = None,
-    resource_limits: Optional[Dict[str, float]] = None,
-    permissions: Optional[List[Permissions]] = None,
+    priority_factor: float | None = None,
+    user_owners: list[str] | None = None,
+    group_owners: list[str] | None = None,
+    resource_limits: dict[str, float] | None = None,
+    permissions: list[Permissions] | None = None,
 ) -> Any:
     """Task for updating an Armada queue.
 
@@ -142,7 +143,7 @@ async def update_queue(
 @task
 async def create_queues(
     armada_credentials: ArmadaCredentials,
-    queues: Sequence[Union[Dict[str, Any], submit_pb2.Queue]],
+    queues: Sequence[dict[str, Any] | submit_pb2.Queue],
 ) -> submit_pb2.BatchQueueCreateResponse:
     """Task for creating several Armada queues at once.
 
@@ -180,7 +181,7 @@ async def create_queues(
 @task
 async def update_queues(
     armada_credentials: ArmadaCredentials,
-    queues: Sequence[Union[Dict[str, Any], submit_pb2.Queue]],
+    queues: Sequence[dict[str, Any] | submit_pb2.Queue],
 ) -> submit_pb2.BatchQueueUpdateResponse:
     """Task for updating several Armada queues at once.
 
@@ -286,7 +287,7 @@ async def get_queue(
 @task
 async def get_queues(
     armada_credentials: ArmadaCredentials,
-) -> List[submit_pb2.Queue]:
+) -> list[submit_pb2.Queue]:
     """Task for listing every Armada queue.
 
     Args:

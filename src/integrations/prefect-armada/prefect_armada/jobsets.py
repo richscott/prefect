@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Sequence, Union
+from collections.abc import Sequence
+from typing import Any
 
 from armada_client.armada import job_pb2, submit_pb2
 from armada_client.typings import JobState
@@ -17,7 +18,7 @@ async def cancel_jobset(
     armada_credentials: ArmadaCredentials,
     queue: str,
     job_set_id: str,
-    filter_states: Optional[Sequence[Union[JobState, str, int]]] = None,
+    filter_states: Sequence[JobState | str | int] | None = None,
 ) -> Any:
     """Task for cancelling the jobs in an Armada job set.
 
@@ -153,8 +154,8 @@ async def get_job_status_by_external_job_uri(
 
 
 def job_states_from_values(
-    values: Sequence[Union[JobState, str, int]],
-) -> List[JobState]:
+    values: Sequence[JobState | str | int],
+) -> list[JobState]:
     """Coerces a sequence of job state representations into `JobState` members.
 
     Args:

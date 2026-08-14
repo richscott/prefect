@@ -1,7 +1,8 @@
 """A module to define flows interacting with Armada resources."""
 
 import asyncio
-from typing import Any, Callable, Dict, Optional
+from collections.abc import Callable
+from typing import Any
 
 from prefect import flow, task
 from prefect_armada.jobs import ArmadaJob
@@ -9,8 +10,8 @@ from prefect_armada.jobs import ArmadaJob
 
 @flow
 def run_armada_job(
-    armada_job: ArmadaJob, print_func: Optional[Callable] = None
-) -> Dict[str, Any]:
+    armada_job: ArmadaJob, print_func: Callable | None = None
+) -> dict[str, Any]:
     """Flow for running an Armada job.
 
     Args:
@@ -46,8 +47,8 @@ def run_armada_job(
 
 @flow
 async def run_armada_job_async(
-    armada_job: ArmadaJob, print_func: Optional[Callable] = None
-) -> Dict[str, Any]:
+    armada_job: ArmadaJob, print_func: Callable | None = None
+) -> dict[str, Any]:
     """Flow for running an Armada job.
 
     Args:
@@ -77,7 +78,7 @@ async def run_armada_job_async(
     """
     armada_job_run = (
         await maybe_coro
-        if asyncio.iscoroutine((maybe_coro := task(armada_job.trigger)()))
+        if asyncio.iscoroutine(maybe_coro := task(armada_job.trigger)())
         else maybe_coro
     )
 

@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
-    Sequence,
     TypeVar,
 )
 
@@ -44,7 +43,7 @@ def _validate_include_files_syntax(include_files: Sequence[Any]) -> None:
     """
     for i, item in enumerate(include_files):
         if not isinstance(item, str):
-            raise ValueError(
+            raise TypeError(
                 f"include_files[{i}] must be a string, got {type(item).__name__}"
             )
         if not item.strip():

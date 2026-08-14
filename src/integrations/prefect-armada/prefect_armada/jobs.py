@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import uuid
 from asyncio import sleep
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Type, Union
+from typing import Any, TypeAlias
 
+import grpc
 import yaml
 from armada_client.armada import job_pb2, submit_pb2
 from armada_client.typings import JobState
 from pydantic import Field
-from typing_extensions import Self, TypeAlias
+from typing_extensions import Self
 
 from prefect import task
 from prefect._internal.compatibility.async_dispatch import async_dispatch
@@ -31,13 +33,13 @@ from prefect_armada.utilities import (
     job_state_from_value,
 )
 
-ArmadaJobRequest: TypeAlias = Union[Dict[str, Any], submit_pb2.JobSubmitRequestItem]
+ArmadaJobRequest: TypeAlias = dict[str, Any] | submit_pb2.JobSubmitRequestItem
 
 
 @task
 async def submit_job(
     armada_credentials: ArmadaCredentials,
-    job_request: Union[ArmadaJobRequest, List[ArmadaJobRequest]],
+    job_request: ArmadaJobRequest | list[ArmadaJobRequest],
     queue: str,
     job_set_id: str,
 ) -> submit_pb2.JobSubmitResponse:
@@ -192,7 +194,7 @@ async def reprioritize_job(
     queue: str,
     job_set_id: str,
     new_priority: float,
-    job_ids: Optional[List[str]] = None,
+    job_ids: list[str] | None = None,
 ) -> submit_pb2.JobReprioritizeResponse:
     """Task for changing the priority of Armada jobs.
 
@@ -238,7 +240,7 @@ async def reprioritize_job(
 @task
 async def get_job_status(
     armada_credentials: ArmadaCredentials,
-    job_ids: List[str],
+    job_ids: list[str],
 ) -> job_pb2.JobStatusResponse:
     """Task for fetching the status of Armada jobs.
 
@@ -273,7 +275,7 @@ async def get_job_status(
 @task
 async def get_job_details(
     armada_credentials: ArmadaCredentials,
-    job_ids: List[str],
+    job_ids: list[str],
 ) -> job_pb2.JobDetailsResponse:
     """Task for fetching the details of Armada jobs.
 
@@ -307,7 +309,7 @@ async def get_job_details(
 @task
 async def get_job_errors(
     armada_credentials: ArmadaCredentials,
-    job_ids: List[str],
+    job_ids: list[str],
 ) -> job_pb2.JobErrorsResponse:
     """Task for fetching the termination reasons of Armada jobs.
 
@@ -342,7 +344,7 @@ async def get_job_errors(
 @task
 async def get_job_run_details(
     armada_credentials: ArmadaCredentials,
-    run_ids: List[str],
+    run_ids: list[str],
 ) -> job_pb2.JobRunDetailsResponse:
     """Task for fetching the details of Armada job runs.
 
@@ -373,26 +375,26 @@ async def get_job_run_details(
         return await client.get_job_run_details(run_ids=run_ids)
 
 
-class ArmadaJobRun(JobRun[Dict[str, Any]]):
+class ArmadaJobRun(JobRun[dict[str, Any]]):
     """A container representing a run of an Armada job."""
 
     def __init__(
         self,
-        armada_job: "ArmadaJob",
+        armada_job: ArmadaJob,
         job_id: str,
         job_set_id: str,
     ):
-        self.job_logs: Optional[Dict[str, str]] = None
+        self.job_logs: dict[str, str] | None = None
         self.job_id = job_id
         self.job_set_id = job_set_id
 
         self._completed = False
         self._armada_job = armada_job
         self._printed_log_lines = 0
-        self._job_state: Optional[JobState] = None
+        self._job_state: JobState | None = None
 
     @property
-    def job_state(self) -> Optional[JobState]:
+    def job_state(self) -> JobState | None:
         """The last observed state of the Armada job."""
         return self._job_state
 
@@ -406,7 +408,7 @@ class ArmadaJobRun(JobRun[Dict[str, Any]]):
             return JobState.UNKNOWN
         return job_state_from_value(response.job_states[self.job_id])
 
-    async def _capture_logs(self, print_func: Optional[Callable] = None):
+    async def _capture_logs(self, print_func: Callable | None = None):
         """Captures the job's logs, printing any lines not yet printed.
 
         Armada serves logs as a snapshot rather than a stream, so the full log
@@ -419,7 +421,7 @@ class ArmadaJobRun(JobRun[Dict[str, Any]]):
                 job_id=self.job_id,
                 namespace=self._armada_job.namespace,
             )
-        except Exception as exc:
+        except grpc.RpcError as exc:
             # Logs are only available while the job's pod exists, so a failure
             # here should not fail the job run.
             self.logger.warning(
@@ -445,7 +447,7 @@ class ArmadaJobRun(JobRun[Dict[str, Any]]):
             f"Job {self.job_id} cancelled with {list(result.cancelled_ids)!r}."
         )
 
-    async def await_for_completion(self, print_func: Optional[Callable] = None):
+    async def await_for_completion(self, print_func: Callable | None = None):
         """Async implementation: waits for the job to complete.
 
         If the job has `cancel_on_timeout` set to `True`, the job will be
@@ -503,7 +505,7 @@ class ArmadaJobRun(JobRun[Dict[str, Any]]):
                 elapsed_time += self._armada_job.interval_seconds
 
     @async_dispatch(await_for_completion)
-    def wait_for_completion(self, print_func: Optional[Callable] = None):
+    def wait_for_completion(self, print_func: Callable | None = None):
         """Waits for the job to complete.
 
         If the job has `cancel_on_timeout` set to `True`, the job will be
@@ -517,7 +519,7 @@ class ArmadaJobRun(JobRun[Dict[str, Any]]):
             create_call(self.await_for_completion, print_func)
         ).result()
 
-    async def afetch_result(self) -> Dict[str, Any]:
+    async def afetch_result(self) -> dict[str, Any]:
         """Async implementation: fetch the results of the job.
 
         Returns:
@@ -536,7 +538,7 @@ class ArmadaJobRun(JobRun[Dict[str, Any]]):
         return self.job_logs or {}
 
     @async_dispatch(afetch_result)
-    def fetch_result(self) -> Dict[str, Any]:
+    def fetch_result(self) -> dict[str, Any]:
         """Fetch the results of the job.
 
         Returns:
@@ -563,7 +565,7 @@ class ArmadaJob(JobBlock):
         ```
     """
 
-    job_request: Dict[str, Any] = Field(
+    job_request: dict[str, Any] = Field(
         default=...,
         title="Job Request",
         description=(
@@ -575,7 +577,7 @@ class ArmadaJob(JobBlock):
         default="prefect",
         description="The Armada queue to submit the job to.",
     )
-    job_set_id: Optional[str] = Field(
+    job_set_id: str | None = Field(
         default=None,
         title="Job Set ID",
         description=(
@@ -599,14 +601,14 @@ class ArmadaJob(JobBlock):
         default=5,
         description="The number of seconds to wait between job status checks.",
     )
-    timeout_seconds: Optional[int] = Field(
+    timeout_seconds: int | None = Field(
         default=None,
         description="The number of seconds to wait for the job run before timing out.",
     )
 
     _block_type_name = "Armada Job"
     _block_type_slug = "armada-job"
-    _documentation_url = "https://docs.prefect.io/integrations/prefect-armada"  # noqa
+    _documentation_url = "https://docs.prefect.io/integrations/prefect-armada"
 
     async def atrigger(self) -> ArmadaJobRun:
         """Async implementation: submit an Armada job and return an
@@ -653,9 +655,7 @@ class ArmadaJob(JobBlock):
         return from_sync.call_soon_in_loop_thread(create_call(self.atrigger)).result()
 
     @classmethod
-    def from_yaml_file(
-        cls: Type[Self], manifest_path: Union[Path, str], **kwargs
-    ) -> Self:
+    def from_yaml_file(cls: type[Self], manifest_path: Path | str, **kwargs) -> Self:
         """Create an `ArmadaJob` from a YAML file.
 
         Args:

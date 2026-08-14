@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import aclosing
-from typing import AsyncGenerator, List, Optional, Sequence
 
 import anyio
 from armada_client.event import Event
@@ -16,7 +16,7 @@ async def stream_job_set_events(
     armada_credentials: ArmadaCredentials,
     queue: str,
     job_set_id: str,
-    from_message_id: Optional[str] = None,
+    from_message_id: str | None = None,
 ) -> AsyncGenerator[Event, None]:
     """Yields events for an Armada job set as they occur.
 
@@ -77,11 +77,11 @@ async def get_job_set_events(
     armada_credentials: ArmadaCredentials,
     queue: str,
     job_set_id: str,
-    from_message_id: Optional[str] = None,
-    max_events: Optional[int] = None,
-    event_types: Optional[Sequence[str]] = None,
-    timeout_seconds: Optional[float] = 30,
-) -> List[Event]:
+    from_message_id: str | None = None,
+    max_events: int | None = None,
+    event_types: Sequence[str] | None = None,
+    timeout_seconds: float | None = 30,
+) -> list[Event]:
     """Task for collecting events from an Armada job set's event stream.
 
     Args:
@@ -118,7 +118,7 @@ async def get_job_set_events(
         ```
     """
     wanted_types = set(event_types) if event_types else None
-    events: List[Event] = []
+    events: list[Event] = []
 
     with anyio.move_on_after(timeout_seconds):
         async with aclosing(
@@ -146,8 +146,8 @@ async def wait_for_job_event(
     job_set_id: str,
     job_id: str,
     event_types: Sequence[str],
-    timeout_seconds: Optional[float] = None,
-) -> Optional[Event]:
+    timeout_seconds: float | None = None,
+) -> Event | None:
     """Task for waiting until a specific Armada job emits one of several events.
 
     Args:
@@ -184,7 +184,7 @@ async def wait_for_job_event(
         ```
     """
     wanted_types = set(event_types)
-    matched: Optional[Event] = None
+    matched: Event | None = None
 
     with anyio.move_on_after(timeout_seconds):
         async with aclosing(

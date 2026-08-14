@@ -352,9 +352,7 @@ class TestArmadaWorker:
             with pytest.raises(
                 InfrastructureError, match="requests to equal its limits"
             ):
-                await worker.run(
-                    flow_run=flow_run, configuration=default_configuration
-                )
+                await worker.run(flow_run=flow_run, configuration=default_configuration)
 
     async def test_retries_job_submission(
         self, default_configuration, flow_run, mock_armada_client, monkeypatch

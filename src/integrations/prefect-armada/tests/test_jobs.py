@@ -1,7 +1,8 @@
+import grpc
 import pytest
 from armada_client.armada import job_pb2, submit_pb2
 from armada_client.typings import JobState
-from conftest import make_job_status_response, make_job_submit_response
+from conftest import FakeRpcError, make_job_status_response, make_job_submit_response
 from prefect_armada.exceptions import (
     ArmadaJobDefinitionError,
     ArmadaJobFailedError,
@@ -330,7 +331,9 @@ class TestArmadaJobRun:
         mock_armada_client.get_job_status.return_value = make_job_status_response(
             **{"test-job-id": JobState.SUCCEEDED.value}
         )
-        mock_binoculars_client.logs.side_effect = RuntimeError("pod is gone")
+        mock_binoculars_client.logs.side_effect = FakeRpcError(
+            grpc.StatusCode.NOT_FOUND, "pod is gone"
+        )
 
         job_run = await valid_armada_job_block.trigger()
         await job_run.wait_for_completion()
