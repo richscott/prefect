@@ -49,8 +49,8 @@ async def submit_job(
         armada_credentials: `ArmadaCredentials` block holding authentication
             needed to generate the required API client.
         job_request: An Armada job request, or a list of job requests. Each job
-            request may be a dictionary (e.g. produced by `yaml.safe_load`) or an
-            Armada `JobSubmitRequestItem`.
+            request may be a dictionary (for example one produced by
+            `yaml.safe_load`) or an Armada `JobSubmitRequestItem`.
         queue: The name of the Armada queue to submit to.
         job_set_id: The name of the Armada job set to submit to.
 

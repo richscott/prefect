@@ -9,7 +9,8 @@ sync with what Armada does with those jobs by
 - replicating Armada job events into Prefect's event system, where they can be
   used by Automations, and
 - marking a flow run as `Crashed` when its Armada job fails before the flow run
-  is able to report its own state (e.g. a bad image or a missing dependency).
+  is able to report its own state (for example a bad image or a missing
+  dependency).
 
 Armada only exposes events per job set, so the observer watches the job sets that
 this process submits to. Additional job sets can be watched by setting

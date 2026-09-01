@@ -19,7 +19,7 @@ def run_armada_job(
         print_func: A function to print the logs from the job.
 
     Returns:
-        A dict of logs from the job, e.g. `{'job_id': 'job_log_str'}`.
+        A dict of logs from the job, for example `{'job_id': 'job_log_str'}`.
 
     Raises:
         ArmadaJobFailedError: If the submitted Armada job does not succeed.
@@ -56,7 +56,7 @@ async def run_armada_job_async(
         print_func: A function to print the logs from the job.
 
     Returns:
-        A dict of logs from the job, e.g. `{'job_id': 'job_log_str'}`.
+        A dict of logs from the job, for example `{'job_id': 'job_log_str'}`.
 
     Raises:
         ArmadaJobFailedError: If the submitted Armada job does not succeed.

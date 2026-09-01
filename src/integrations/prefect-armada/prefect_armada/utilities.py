@@ -68,8 +68,8 @@ def _slugify_name(name: str, max_length: int = 45) -> str | None:
     of the slug at 45 chars.
 
     The 45 character length keeps the total length of a name below 63
-    characters, which is the limit for e.g. label names that follow RFC 1123
-    (hostnames) and RFC 1035 (domain names).
+    characters, which is the limit for names such as labels that follow
+    RFC 1123 (hostnames) and RFC 1035 (domain names).
 
     Args:
         name: The name of the job
@@ -197,8 +197,8 @@ def _normalize_message_dict(value: Any, descriptor: Descriptor) -> Any:
     JSON that Kubernetes itself accepts, and two differences make a manifest
     written by hand unusable as-is:
 
-    - Resource quantities (e.g. `"500m"`) are `Quantity` messages with a single
-      `string` field, so `{"cpu": "500m"}` must become
+    - Resource quantities (for example `"500m"`) are `Quantity` messages with a
+      single `string` field, so `{"cpu": "500m"}` must become
       `{"cpu": {"string": "500m"}}`.
     - `None` values are not valid for any protobuf field, and they show up
       routinely after job template rendering when an optional work pool
@@ -271,7 +271,8 @@ def pod_spec_from_dict(pod_spec: dict[str, Any]) -> core_v1.PodSpec:
     """Converts a Kubernetes pod spec dictionary into an Armada pod spec.
 
     Args:
-        pod_spec: A Kubernetes pod spec, e.g. produced by `yaml.safe_load`.
+        pod_spec: A Kubernetes pod spec, for example one produced by
+            `yaml.safe_load`.
 
     Returns:
         The equivalent `PodSpec` protobuf message.
@@ -427,7 +428,7 @@ def format_job_pid(queue: str, job_set_id: str, job_id: str) -> str:
         job_id: The Armada job ID.
 
     Returns:
-        The infrastructure PID, e.g. `"my-queue:my-job-set:01hqk..."`.
+        The infrastructure PID, for example `"my-queue:my-job-set:01hqk..."`.
     """
     return f"{queue}:{job_set_id}:{job_id}"
 

@@ -21,12 +21,12 @@ async def stream_job_set_events(
     """Yields events for an Armada job set as they occur.
 
     The stream begins at the start of the job set's history unless
-    `from_message_id` is provided, and it does not end on its own: Armada keeps
-    the stream open in case more jobs are added to the job set. Callers are
-    responsible for deciding when to stop consuming it, and should wrap this
-    generator in `contextlib.aclosing` so that the underlying gRPC stream is
-    cancelled as soon as they stop rather than whenever the generator is
-    garbage collected.
+    `from_message_id` is provided, and it does not end on its own, because
+    Armada keeps the stream open in case more jobs are added to the job set.
+    Callers are responsible for deciding when to stop consuming it, and should
+    wrap this generator in `contextlib.aclosing` so that the underlying gRPC
+    stream is cancelled as soon as they stop rather than whenever the generator
+    is garbage collected.
 
     Args:
         armada_credentials: `ArmadaCredentials` block holding authentication
@@ -91,8 +91,8 @@ async def get_job_set_events(
         job_set_id: The name of the Armada job set to read events for.
         from_message_id: If provided, collection resumes after this message ID.
         max_events: If provided, collection stops after this many matching events.
-        event_types: If provided, only events of these types are collected, e.g.
-            `["running", "succeeded"]`.
+        event_types: If provided, only events of these types are collected,
+            for example `["running", "succeeded"]`.
         timeout_seconds: How long to collect events for. Armada job set streams
             stay open indefinitely, so collection is bounded by either this
             timeout or `max_events`.
@@ -156,7 +156,7 @@ async def wait_for_job_event(
         queue: The name of the Armada queue the job was submitted to.
         job_set_id: The name of the Armada job set the job belongs to.
         job_id: The ID of the job to wait for.
-        event_types: The event types to wait for, e.g.
+        event_types: The event types to wait for, for example
             `["succeeded", "failed", "cancelled"]`.
         timeout_seconds: How long to wait before giving up. If not provided, the
             task waits indefinitely.

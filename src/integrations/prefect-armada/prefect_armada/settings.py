@@ -165,8 +165,8 @@ class ArmadaObserverSettings(PrefectBaseSettings):
     forward_crashed_run_logs: bool = Field(
         default=True,
         description="Whether to fetch and forward job logs for flow runs that "
-        "crashed before establishing connectivity to the Prefect server (e.g. a "
-        "bad entrypoint or missing dependencies).",
+        "crashed before establishing connectivity to the Prefect server (for "
+        "example a bad entrypoint or missing dependencies).",
     )
 
     forward_crashed_run_logs_tail_lines: int = Field(

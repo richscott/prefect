@@ -13,18 +13,43 @@ to poll for flow runs.
 
 ### Connecting to Armada
 
-The worker connects to the Armada server's gRPC endpoint. When a work pool does
-not reference an `ArmadaClusterConfig` or `ArmadaCredentials` block, connection
-details are read from the environment:
+The worker connects to the Armada server's gRPC endpoint. The address can be set
+on the work pool itself with the `armada_host`, `armada_port`, and
+`armada_disable_ssl` variables, which are editable in the Prefect UI when
+creating or editing an Armada work pool. Armada clusters that serve gRPC without
+TLS - which is how the armada-operator's quickstart is configured - need
+`armada_disable_ssl` set, or the worker's TLS handshake fails with
+`WRONG_VERSION_NUMBER`.
+
+When none is set, and the work pool does not reference an
+`ArmadaClusterConfig` or `ArmadaCredentials` block, connection details are read
+from the environment:
 
 ```bash
 export PREFECT_INTEGRATIONS_ARMADA_CONNECTION_HOST="armada.example.com"
 export PREFECT_INTEGRATIONS_ARMADA_CONNECTION_PORT="50051"
+export PREFECT_INTEGRATIONS_ARMADA_CONNECTION_DISABLE_SSL="true"
 prefect worker start --pool 'my-work-pool' --type armada
 ```
 
 The `ARMADA_SERVER` and `ARMADA_PORT` environment variables used by Armada's own
 tooling are also honored.
+
+### Reaching the Prefect API from flow-run pods
+
+Flow runs execute as pods inside the Armada cluster and inherit the worker's
+`PREFECT_API_URL`, so that address has to be routable from the cluster. A worker
+pointed at a Prefect server on `localhost` hands each pod an address that
+resolves to the pod itself; set the `api_dns_name` work pool variable to an
+address the API is reachable at from inside the cluster - for a kind cluster,
+the gateway of its Docker network - and bind the server to it:
+
+```bash
+prefect server start --host 0.0.0.0
+```
+
+The worker warns when it is about to hand a job a local API address with no
+`api_dns_name` set.
 
 ### Using a custom Armada job template
 
@@ -85,6 +110,7 @@ checkout out the [Prefect docs](https://docs.prefect.io/concepts/work-pools/).
 from __future__ import annotations
 
 import enum
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import (
@@ -109,6 +135,7 @@ from prefect.exceptions import (
     InfrastructureError,
     InfrastructureNotFound,
 )
+from prefect.logging.loggers import get_logger
 from prefect.utilities.dockerutils import get_prefect_image_name
 from prefect.utilities.processutils import command_from_string
 from prefect.workers.base import (
@@ -142,6 +169,13 @@ R = TypeVar("R")
 # The annotation Armada uses to associate a job with a resource in an external
 # system. Armada indexes it so jobs can be looked up without their job ID.
 EXTERNAL_JOB_URI_FIELD = "externalJobUri"
+
+# Hosts in a Prefect API URL that a job's pod cannot reach the worker's API at:
+# the loopback names resolve to the pod itself, and `0.0.0.0` is only an address
+# to bind to, not one to connect to.
+_LOCAL_API_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0")
+
+logger: logging.Logger = get_logger("prefect_armada.worker")
 
 
 def _get_default_job_manifest_template() -> dict[str, Any]:
@@ -220,6 +254,11 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
         job_set_id: The Armada job set to submit jobs to.
         namespace: The Kubernetes namespace Armada should run jobs in.
         job_manifest: The Armada job request used to submit jobs.
+        armada_host: The hostname or IP address of the Armada server.
+        armada_port: The port of the Armada server.
+        armada_disable_ssl: Whether to connect to the Armada server without TLS.
+        api_dns_name: The address the Prefect API is reachable at from inside the
+            cluster, substituted for a local address in jobs' `PREFECT_API_URL`.
         cluster_config: The Armada cluster configuration to connect with.
         credentials: The Armada credentials to authenticate with.
         job_watch_timeout_seconds: The number of seconds to wait for the job to
@@ -241,15 +280,16 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
     job_manifest: dict[str, Any] = Field(
         json_schema_extra={"template": _get_default_job_manifest_template()}
     )
+    armada_host: str | None = Field(default=None)
+    armada_port: int | None = Field(default=None)
+    armada_disable_ssl: bool | None = Field(default=None)
+    api_dns_name: str | None = Field(default=None)
     cluster_config: ArmadaClusterConfig | None = Field(default=None)
     credentials: ArmadaCredentials | None = Field(default=None)
     job_watch_timeout_seconds: int | None = Field(default=None)
     stream_output: bool = Field(default=True)
 
     env: dict[str, str | None] | list[dict[str, Any]] = Field(default_factory=dict)
-
-    # internal-use only
-    _api_dns_name: str | None = None  # Replaces 'localhost' in API URL
 
     @field_validator("job_manifest", mode="before")
     @classmethod
@@ -383,7 +423,28 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
         a `cluster_config` set on the job configuration is used when the
         credentials block does not carry one of its own. When neither is set,
         connection details are read from the current environment.
+
+        `armada_host`, `armada_port`, and `armada_disable_ssl` override the host,
+        port, and TLS setting of whichever cluster config is used, so a work pool
+        can point at an Armada server without configuring a block.
         """
+        credentials = self._get_block_credentials()
+
+        overrides: dict[str, Any] = {}
+        if self.armada_host:
+            overrides["host"] = self.armada_host
+        if self.armada_port:
+            overrides["port"] = self.armada_port
+        if self.armada_disable_ssl is not None:
+            overrides["disable_ssl"] = self.armada_disable_ssl
+        if not overrides:
+            return credentials
+
+        cluster_config = credentials.get_cluster_config().model_copy(update=overrides)
+        return credentials.model_copy(update={"cluster_config": cluster_config})
+
+    def _get_block_credentials(self) -> ArmadaCredentials:
+        """Returns the credentials described by this configuration's blocks."""
         if self.credentials:
             if self.credentials.cluster_config is None and self.cluster_config:
                 return self.credentials.model_copy(
@@ -491,26 +552,51 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
             self.container["env"] = transformed_env
 
     def _update_prefect_api_url_if_local_server(self):
-        """If the API URL has been set by the base environment rather than by the
-        user, update the value to ensure connectivity when using a bridge network by
-        updating local connections to use the internal host
+        """Rewrites a local Prefect API address into one jobs can reach.
+
+        The worker propagates its own `PREFECT_API_URL` to the jobs it submits,
+        but a worker talking to a server on `localhost` hands the job an address
+        that, inside a pod, resolves to the pod itself. `api_dns_name` replaces
+        the local host with an address routable from the cluster.
         """
         if isinstance(self.env, dict):
-            if (api_url := self.env.get("PREFECT_API_URL")) and self._api_dns_name:
-                self.env["PREFECT_API_URL"] = api_url.replace(
-                    "localhost", self._api_dns_name
-                ).replace("127.0.0.1", self._api_dns_name)
+            api_url = self.env.get("PREFECT_API_URL")
+            if api_url and (rewritten := self._rewrite_local_api_url(api_url)):
+                self.env["PREFECT_API_URL"] = rewritten
         else:
             # Handle list format
             for env_var in self.env:
-                if (
-                    env_var.get("name") == "PREFECT_API_URL"
-                    and self._api_dns_name
-                    and (value := env_var.get("value"))
-                ):
-                    env_var["value"] = value.replace(
-                        "localhost", self._api_dns_name
-                    ).replace("127.0.0.1", self._api_dns_name)
+                if env_var.get("name") != "PREFECT_API_URL":
+                    continue
+                value = env_var.get("value")
+                if value and (rewritten := self._rewrite_local_api_url(value)):
+                    env_var["value"] = rewritten
+
+    def _rewrite_local_api_url(self, api_url: str) -> str | None:
+        """Points a local API URL at `api_dns_name`.
+
+        Returns the rewritten URL, or `None` when the URL needs no rewriting.
+        Warns when a local URL is about to be handed to a job with no
+        `api_dns_name` to replace it, since the job cannot reach it.
+        """
+        if not any(host in api_url for host in _LOCAL_API_HOSTS):
+            return None
+
+        if not self.api_dns_name:
+            logger.warning(
+                "Flow runs will be given PREFECT_API_URL=%s, which inside an "
+                "Armada job resolves to the job's own pod rather than to the "
+                "Prefect API, so they will fail to connect. Set the "
+                "`api_dns_name` job variable on the work pool to an address the "
+                "Prefect API is reachable at from inside the cluster, and make "
+                "sure the API is bound to that address.",
+                api_url,
+            )
+            return None
+
+        for host in _LOCAL_API_HOSTS:
+            api_url = api_url.replace(host, self.api_dns_name)
+        return api_url
 
     def _slugify_labels(self):
         """Slugifies the labels in the job manifest."""
@@ -611,6 +697,58 @@ class ArmadaWorkerVariables(BaseVariables):
     default base job template.
     """
 
+    armada_host: str | None = Field(
+        default=None,
+        title="Armada Server Host",
+        description=(
+            "The hostname or IP address of the Armada server's gRPC endpoint. "
+            "Overrides the host of the cluster config used for job submission. "
+            "If not set here or on a block, the host is read from the worker's "
+            "environment, defaulting to 'localhost'."
+        ),
+        examples=["armada.example.com"],
+    )
+    armada_port: int | None = Field(
+        default=None,
+        title="Armada Server Port",
+        ge=1,
+        le=65535,
+        description=(
+            "The port of the Armada server's gRPC endpoint. Overrides the port "
+            "of the cluster config used for job submission. If not set here or "
+            "on a block, the port is read from the worker's environment, "
+            "defaulting to 50051. (If you started the Armada cluster via the "
+            "armada-operator, it is probably 30002)"
+        ),
+        examples=[50051],
+    )
+    armada_disable_ssl: bool | None = Field(
+        default=None,
+        title="Disable TLS",
+        description=(
+            "Whether to connect to the Armada server without TLS. Overrides the "
+            "TLS setting of the cluster config used for job submission. If not "
+            "set here or on a block, it is read from the worker's environment, "
+            "defaulting to using TLS. Armada clusters started by the "
+            "armada-operator serve gRPC without TLS, so they need this enabled."
+        ),
+        examples=[True],
+    )
+    api_dns_name: str | None = Field(
+        default=None,
+        title="Prefect API Address for Jobs",
+        description=(
+            "The hostname or IP address the Prefect API is reachable at from "
+            "inside the cluster. Jobs inherit the worker's PREFECT_API_URL, so a "
+            "worker pointed at a Prefect server on localhost hands each job an "
+            "address that resolves to the job's own pod; this value replaces the "
+            "local host in that URL. Only needed for a Prefect API that is local "
+            "to the worker, and the API must be bound to the address given here."
+            "(If you started the Armada cluster via the armada-operator, it is "
+            "probably 172.18.0.1)"
+        ),
+        examples=["172.18.0.1"],
+    )
     annotations: dict[str, str] = Field(
         default_factory=dict,
         description="Annotations applied to Armada jobs created by the worker.",
@@ -676,7 +814,8 @@ class ArmadaWorkerVariables(BaseVariables):
         title="CPU Request",
         description=(
             "The CPU resource request for the job container. Uses Kubernetes"
-            " resource quantity format (e.g. '500m' for half a CPU, '2' for two"
+            " resource quantity format (for example '500m' for half a CPU, '2'"
+            " for two"
             " CPUs). If not provided, no CPU request is configured."
         ),
     )
@@ -685,7 +824,8 @@ class ArmadaWorkerVariables(BaseVariables):
         title="CPU Limit",
         description=(
             "The CPU resource limit for the job container. Uses Kubernetes"
-            " resource quantity format (e.g. '500m' for half a CPU, '2' for two"
+            " resource quantity format (for example '500m' for half a CPU, '2'"
+            " for two"
             " CPUs). If not provided, no CPU limit is configured."
         ),
     )
@@ -694,7 +834,8 @@ class ArmadaWorkerVariables(BaseVariables):
         title="Memory Request",
         description=(
             "The memory resource request for the job container. Uses Kubernetes"
-            " resource quantity format (e.g. '128Mi', '1Gi'). If not provided, no"
+            " resource quantity format (for example '128Mi', '1Gi'). If not"
+            " provided, no"
             " memory request is configured."
         ),
     )
@@ -703,7 +844,8 @@ class ArmadaWorkerVariables(BaseVariables):
         title="Memory Limit",
         description=(
             "The memory resource limit for the job container. Uses Kubernetes"
-            " resource quantity format (e.g. '128Mi', '1Gi'). If not provided, no"
+            " resource quantity format (for example '128Mi', '1Gi'). If not"
+            " provided, no"
             " memory limit is configured."
         ),
     )
@@ -731,6 +873,7 @@ class ArmadaWorker(
     )
     _display_name = "Armada"
     _documentation_url = "https://docs.prefect.io/integrations/prefect-armada"
+    _logo_url = "https://raw.githubusercontent.com/armadaproject/armada/master/logo.svg"
 
     async def _initiate_run(
         self,

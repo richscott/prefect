@@ -14,6 +14,8 @@ from pydantic import ValidationError
 from prefect.client.schemas import FlowRun
 from prefect.exceptions import InfrastructureError, InfrastructureNotFound
 from prefect.utilities.dockerutils import get_prefect_image_name
+from prefect.workers.base import BaseWorker
+from prefect.workers.utilities import get_locally_installed_worker_metadata
 
 
 @pytest.fixture(autouse=True)
@@ -45,6 +47,10 @@ class TestArmadaWorkerJobConfiguration:
         assert job_manifest["podSpec"]["restartPolicy"] == "Never"
         assert job_manifest["podSpec"]["containers"][0]["name"] == "prefect-job"
         assert set(template["variables"]["properties"]) >= {
+            "armada_host",
+            "armada_port",
+            "armada_disable_ssl",
+            "api_dns_name",
             "queue",
             "job_set_id",
             "namespace",
@@ -146,6 +152,77 @@ class TestArmadaWorkerJobConfiguration:
         } in env
         assert any(entry.get("name") == "PREFECT__FLOW_RUN_ID" for entry in env)
 
+    async def test_prepare_for_flow_run_rewrites_a_local_api_url(
+        self, default_configuration, flow_run
+    ):
+        default_configuration.api_dns_name = "172.18.0.1"
+        default_configuration.env = {"PREFECT_API_URL": "http://127.0.0.1:4200/api"}
+
+        default_configuration.prepare_for_flow_run(flow_run)
+
+        env = default_configuration.job_manifest["podSpec"]["containers"][0]["env"]
+        assert {
+            "name": "PREFECT_API_URL",
+            "value": "http://172.18.0.1:4200/api",
+        } in env
+
+    async def test_prepare_for_flow_run_rewrites_a_local_api_url_in_list_env(
+        self, default_configuration, flow_run
+    ):
+        default_configuration.api_dns_name = "172.18.0.1"
+        default_configuration.env = [
+            {"name": "PREFECT_API_URL", "value": "http://localhost:4200/api"}
+        ]
+
+        default_configuration.prepare_for_flow_run(flow_run)
+
+        env = default_configuration.job_manifest["podSpec"]["containers"][0]["env"]
+        assert {
+            "name": "PREFECT_API_URL",
+            "value": "http://172.18.0.1:4200/api",
+        } in env
+
+    async def test_prepare_for_flow_run_leaves_a_routable_api_url_alone(
+        self, default_configuration, flow_run, caplog
+    ):
+        default_configuration.api_dns_name = "172.18.0.1"
+        default_configuration.env = {
+            "PREFECT_API_URL": "http://prefect.example.com:4200/api"
+        }
+
+        default_configuration.prepare_for_flow_run(flow_run)
+
+        env = default_configuration.job_manifest["podSpec"]["containers"][0]["env"]
+        assert {
+            "name": "PREFECT_API_URL",
+            "value": "http://prefect.example.com:4200/api",
+        } in env
+        assert "resolves to the job's own pod" not in caplog.text
+
+    async def test_prepare_for_flow_run_warns_about_an_unreachable_api_url(
+        self, default_configuration, flow_run, caplog
+    ):
+        default_configuration.env = {"PREFECT_API_URL": "http://127.0.0.1:4200/api"}
+
+        default_configuration.prepare_for_flow_run(flow_run)
+
+        assert "resolves to the job's own pod" in caplog.text
+        assert "api_dns_name" in caplog.text
+        # The URL is left as-is; there is nothing to replace it with
+        env = default_configuration.job_manifest["podSpec"]["containers"][0]["env"]
+        assert {
+            "name": "PREFECT_API_URL",
+            "value": "http://127.0.0.1:4200/api",
+        } in env
+
+    async def test_api_dns_name_comes_from_the_work_pool_variables(self):
+        configuration = await ArmadaWorkerJobConfiguration.from_template_and_values(
+            ArmadaWorker.get_default_base_job_template(),
+            {"api_dns_name": "172.18.0.1"},
+        )
+
+        assert configuration.api_dns_name == "172.18.0.1"
+
     async def test_prepare_for_flow_run_slugifies_labels_and_annotations(
         self, default_configuration, flow_run
     ):
@@ -240,6 +317,86 @@ class TestArmadaWorkerJobConfiguration:
         credentials = default_configuration.get_credentials()
 
         assert credentials.cluster_config == cluster_config
+        assert credentials.token.get_secret_value() == "abc123"
+
+    async def test_host_and_port_come_from_the_work_pool_variables(self):
+        configuration = await ArmadaWorkerJobConfiguration.from_template_and_values(
+            ArmadaWorker.get_default_base_job_template(),
+            {"armada_host": "armada.example.com", "armada_port": 12345},
+        )
+
+        assert configuration.armada_host == "armada.example.com"
+        assert configuration.armada_port == 12345
+        assert configuration.get_credentials().get_cluster_config().target == (
+            "armada.example.com:12345"
+        )
+
+    def test_host_and_port_override_the_cluster_config(self, default_configuration):
+        default_configuration.cluster_config = ArmadaClusterConfig(
+            host="from-block.example.com", port=50051, disable_ssl=True
+        )
+        default_configuration.armada_host = "armada.example.com"
+        default_configuration.armada_port = 12345
+
+        cluster_config = default_configuration.get_credentials().get_cluster_config()
+
+        assert cluster_config.target == "armada.example.com:12345"
+        # Settings the work pool does not carry are kept from the block
+        assert cluster_config.disable_ssl is True
+
+    def test_host_and_port_override_independently(self, default_configuration):
+        default_configuration.cluster_config = ArmadaClusterConfig(
+            host="from-block.example.com", port=50051
+        )
+        default_configuration.armada_port = 12345
+
+        cluster_config = default_configuration.get_credentials().get_cluster_config()
+
+        assert cluster_config.target == "from-block.example.com:12345"
+
+    async def test_disable_ssl_comes_from_the_work_pool_variables(self):
+        configuration = await ArmadaWorkerJobConfiguration.from_template_and_values(
+            ArmadaWorker.get_default_base_job_template(),
+            {"armada_host": "armada.example.com", "armada_disable_ssl": True},
+        )
+
+        cluster_config = configuration.get_credentials().get_cluster_config()
+
+        assert cluster_config.disable_ssl is True
+        # An insecure channel is used when no call credentials need carrying
+        assert cluster_config.get_channel_credentials() is None
+
+    def test_disable_ssl_overrides_the_cluster_config(self, default_configuration):
+        default_configuration.cluster_config = ArmadaClusterConfig(
+            host="from-block.example.com", disable_ssl=True
+        )
+        default_configuration.armada_disable_ssl = False
+
+        cluster_config = default_configuration.get_credentials().get_cluster_config()
+
+        assert cluster_config.host == "from-block.example.com"
+        assert cluster_config.disable_ssl is False
+
+    def test_disable_ssl_is_not_overridden_when_unset(self, default_configuration):
+        default_configuration.cluster_config = ArmadaClusterConfig(
+            host="from-block.example.com", disable_ssl=True
+        )
+        default_configuration.armada_host = "armada.example.com"
+
+        cluster_config = default_configuration.get_credentials().get_cluster_config()
+
+        assert cluster_config.disable_ssl is True
+
+    def test_host_and_port_override_the_credentials_block(self, default_configuration):
+        default_configuration.credentials = ArmadaCredentials(
+            cluster_config=ArmadaClusterConfig(host="from-block.example.com"),
+            token="abc123",
+        )
+        default_configuration.armada_host = "armada.example.com"
+
+        credentials = default_configuration.get_credentials()
+
+        assert credentials.get_cluster_config().host == "armada.example.com"
         assert credentials.token.get_secret_value() == "abc123"
 
 
@@ -464,3 +621,40 @@ class TestArmadaWorker:
 
         mock_observer.start.assert_not_called()
         mock_observer.stop.assert_not_called()
+
+
+class TestWorkPoolTypeMetadata:
+    """The work pool creation UI is driven entirely by this metadata, so a worker
+    missing any of it is either unselectable or unlabelled."""
+
+    def test_worker_is_registered_under_its_type(self):
+        assert BaseWorker.get_worker_class_from_type("armada") is ArmadaWorker
+
+    def test_display_name(self):
+        assert ArmadaWorker.get_display_name() == "Armada"
+
+    def test_description(self):
+        assert "Armada" in ArmadaWorker.get_description()
+
+    def test_logo_url(self):
+        assert ArmadaWorker.get_logo_url().endswith(".svg")
+
+    def test_documentation_url(self):
+        assert ArmadaWorker.get_documentation_url().startswith("https://")
+
+    def test_collections_view_metadata(self):
+        """Metadata the server merges into the `aggregate-worker-metadata` view."""
+        metadata = get_locally_installed_worker_metadata()
+
+        assert metadata["prefect-armada"]["armada"] == {
+            "type": "armada",
+            "display_name": "Armada",
+            "description": ArmadaWorker.get_description(),
+            "documentation_url": ArmadaWorker.get_documentation_url(),
+            "logo_url": ArmadaWorker.get_logo_url(),
+            "install_command": "pip install prefect-armada",
+            "default_base_job_configuration": (
+                ArmadaWorker.get_default_base_job_template()
+            ),
+            "is_beta": False,
+        }

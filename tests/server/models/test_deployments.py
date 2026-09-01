@@ -2090,6 +2090,46 @@ class TestMarkDeploymentsReady:
                     timeout=0.5,
                 )
 
+    async def test_waits_out_a_concurrent_writer_on_sqlite(
+        self,
+        session: AsyncSession,
+        deployment: orm_models.Deployment,
+    ):
+        # SQLite ignores FOR UPDATE, so the transaction must begin in IMMEDIATE
+        # mode. Otherwise it reads under a shared lock and then upgrades to a
+        # write lock, which SQLite fails immediately with "database is locked"
+        # rather than waiting out `busy_timeout`.
+        db = provide_database_interface()
+        if db.dialect.name != "sqlite":
+            pytest.skip("Lock upgrades are a SQLite-only failure mode")
+
+        holding = asyncio.Event()
+
+        async def hold_the_write_lock() -> None:
+            async with db.session_context(
+                begin_transaction=True, with_for_update=True
+            ) as writer:
+                await writer.execute(
+                    sa.update(db.Deployment)
+                    .where(db.Deployment.id == deployment.id)
+                    .values(last_polled=now("UTC"))
+                )
+                holding.set()
+                await asyncio.sleep(0.5)
+
+        writer_task = asyncio.create_task(hold_the_write_lock())
+        await holding.wait()
+
+        try:
+            await models.deployments.mark_deployments_ready(
+                db=db, deployment_ids=[deployment.id]
+            )
+        finally:
+            await writer_task
+
+        await session.refresh(deployment)
+        assert deployment.status == DeploymentStatus.READY
+
 
 class TestMarkDeploymentsNotReady:
     async def test_marks_ready_deployments_as_not_ready(

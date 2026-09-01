@@ -1294,8 +1294,16 @@ async def mark_deployments_ready(
     if not deployment_ids and not work_queue_ids:
         return
 
+    # `with_for_update` opens the SQLite transaction in IMMEDIATE mode so the
+    # write lock is taken up front. SQLite ignores `FOR UPDATE`, so without it
+    # the transaction reads under a shared lock and then tries to upgrade to a
+    # write lock for the UPDATE below; SQLite refuses to run the busy handler
+    # for a lock upgrade (it would deadlock) and fails immediately with
+    # "database is locked", ignoring `busy_timeout`. No-op on PostgreSQL, which
+    # locks the rows on read instead.
     async with db.session_context(
         begin_transaction=True,
+        with_for_update=True,
     ) as session:
         # ORDER BY id locks rows in deterministic order so concurrent
         # calls cannot deadlock. SKIP LOCKED is intentionally avoided —
@@ -1365,10 +1373,11 @@ async def mark_deployments_not_ready(
         if not deployment_ids and not work_queue_ids:
             return
 
+        # See comments in mark_deployments_ready.
         async with db.session_context(
             begin_transaction=True,
+            with_for_update=True,
         ) as session:
-            # See comment in mark_deployments_ready.
             locked = (
                 select(db.Deployment.id, db.Deployment.status)
                 .where(

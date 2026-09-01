@@ -63,8 +63,9 @@ def armada(
         work_pool: The name of the Armada work pool to use
         include_files: Optional sequence of file patterns to include in the bundle.
             Patterns are relative to the flow file location. Supports glob patterns
-            (e.g., "*.yaml", "data/**/*.csv"). Files matching these patterns will
-            be bundled and available in the remote execution environment.
+            (for example, "*.yaml", "data/**/*.csv"). Files matching these
+            patterns will be bundled and available in the remote execution
+            environment.
         launcher: Optional upload and execution launcher override.
         **job_variables: Additional job variables to use for infrastructure configuration
 

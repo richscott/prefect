@@ -186,7 +186,7 @@ class ArmadaClusterConfig(Block):
 
         Args:
             call_credentials: Per-call credentials to compose with the channel
-                credentials, e.g. an authorization header.
+                credentials, for example an authorization header.
 
         Returns:
             The channel credentials to use, or `None` when an insecure channel
