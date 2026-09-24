@@ -27,6 +27,12 @@ def mock_observer(monkeypatch: pytest.MonkeyPatch):
     return mocks
 
 
+@pytest.fixture(autouse=True)
+def armada_client(mock_armada_client):
+    """Keeps the worker's startup queue check from dialing a real Armada server."""
+    return mock_armada_client
+
+
 @pytest.fixture
 def flow_run():
     return FlowRun(flow_id=uuid.uuid4(), name="my-flow-run-name")
@@ -677,6 +683,70 @@ class TestArmadaWorker:
 
         mock_observer.start.assert_not_called()
         mock_observer.stop.assert_not_called()
+
+
+class TestQueueCheckOnStartup:
+    async def test_worker_starts_when_the_queue_exists(self, mock_armada_client):
+        async with ArmadaWorker(work_pool_name=f"test-{uuid.uuid4()}") as worker:
+            assert worker.is_setup
+
+        mock_armada_client.get_queue.assert_awaited_once_with(name="prefect")
+
+    async def test_worker_exits_when_the_queue_does_not_exist(
+        self, mock_armada_client, mock_observer, caplog
+    ):
+        mock_armada_client.get_queue.side_effect = FakeRpcError(
+            grpc.StatusCode.NOT_FOUND, "could not find queue"
+        )
+        worker = ArmadaWorker(work_pool_name=f"test-{uuid.uuid4()}")
+
+        with pytest.raises(SystemExit) as exc_info:
+            async with worker:
+                pytest.fail("The worker should not start without its queue")
+
+        assert exc_info.value.code == 1
+        assert "Armada queue 'prefect'" in caplog.text
+        assert "does not exist" in caplog.text
+        assert not worker.is_setup
+        mock_observer.stop.assert_called_once()
+
+    async def test_start_exits_when_the_queue_does_not_exist(self, mock_armada_client):
+        mock_armada_client.get_queue.side_effect = FakeRpcError(
+            grpc.StatusCode.NOT_FOUND, "could not find queue"
+        )
+        worker = ArmadaWorker(work_pool_name=f"test-{uuid.uuid4()}")
+
+        with pytest.raises(SystemExit) as exc_info:
+            await worker.start(run_once=True)
+
+        assert exc_info.value.code == 1
+
+    async def test_checks_the_queue_configured_on_the_work_pool(
+        self, mock_armada_client
+    ):
+        template = ArmadaWorker.get_default_base_job_template()
+        template["variables"]["properties"]["queue"]["default"] = "my-queue"
+
+        async with ArmadaWorker(
+            work_pool_name=f"test-{uuid.uuid4()}", base_job_template=template
+        ):
+            pass
+
+        mock_armada_client.get_queue.assert_awaited_once_with(name="my-queue")
+
+    @pytest.mark.parametrize(
+        "status_code",
+        [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.PERMISSION_DENIED],
+    )
+    async def test_worker_starts_when_the_queue_cannot_be_checked(
+        self, mock_armada_client, caplog, status_code
+    ):
+        mock_armada_client.get_queue.side_effect = FakeRpcError(status_code, "nope")
+
+        async with ArmadaWorker(work_pool_name=f"test-{uuid.uuid4()}") as worker:
+            assert worker.is_setup
+
+        assert "Unable to verify that Armada queue 'prefect' exists" in caplog.text
 
 
 class TestWorkPoolTypeMetadata:

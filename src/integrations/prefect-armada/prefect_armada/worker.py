@@ -186,6 +186,9 @@ EXTERNAL_JOB_URI_FIELD = "externalJobUri"
 # to bind to, not one to connect to.
 _LOCAL_API_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0")
 
+# How long the worker waits on Armada when checking its queue exists at startup.
+_QUEUE_CHECK_TIMEOUT_SECONDS = 30
+
 logger: logging.Logger = get_logger("prefect_armada.worker")
 
 
@@ -1127,11 +1130,89 @@ class ArmadaWorker(
 
         return None
 
+    async def _get_missing_queue(self) -> str | None:
+        """Checks that the work pool's Armada queue exists.
+
+        A missing queue otherwise goes unnoticed until a flow run is submitted,
+        and the flow run sits in `Late` until then. Only the queue set on the
+        work pool is checked; a deployment overriding `queue` is checked when
+        its flow runs are submitted.
+
+        Returns:
+            The queue's name if Armada reports that it does not exist, or `None`
+            otherwise, including when the check could not be completed.
+        """
+        if self._work_pool is None:
+            self._logger.debug(
+                "Work pool is not yet known; skipping the Armada queue check."
+            )
+            return None
+
+        try:
+            configuration = await self.job_configuration.from_template_and_values(
+                base_job_template=self._work_pool.base_job_template,
+                values={},
+                client=self._client,
+            )
+        except Exception as exc:
+            self._logger.warning(
+                "Unable to read the work pool's job configuration; skipping the "
+                "Armada queue check: %s",
+                exc,
+            )
+            return None
+
+        queue = configuration.queue
+        try:
+            with anyio.fail_after(_QUEUE_CHECK_TIMEOUT_SECONDS):
+                async with self._get_configured_armada_client(configuration) as client:
+                    await client.get_queue(name=queue)
+        except grpc.RpcError as exc:
+            if rpc_status_code(exc) is grpc.StatusCode.NOT_FOUND:
+                return queue
+            message = rpc_details(exc) or str(exc)
+            if hint := self._get_armada_error_hint(exc, queue):
+                message += f". Hint: {hint}"
+            self._logger.warning(
+                "Unable to verify that Armada queue %r exists: %s", queue, message
+            )
+        except TimeoutError:
+            self._logger.warning(
+                "Timed out after %s seconds verifying that Armada queue %r exists.",
+                _QUEUE_CHECK_TIMEOUT_SECONDS,
+                queue,
+            )
+        return None
+
     async def __aenter__(self):
-        """Starts the Armada observer alongside the worker."""
+        """Starts the Armada observer alongside the worker.
+
+        Exits the process if the work pool's Armada queue does not exist, since
+        every flow run the worker submits would be rejected.
+        """
         if ArmadaSettings().observer.enabled:
             start_observer()
-        return await super().__aenter__()
+        try:
+            await super().__aenter__()
+        except BaseException:
+            if ArmadaSettings().observer.enabled:
+                stop_observer()
+            raise
+
+        if queue := await self._get_missing_queue():
+            self._logger.error(
+                "Armada queue %r, configured for work pool %r, does not exist. "
+                "Create the queue in Armada (for example, `armadactl create "
+                "queue %s`) or set the work pool's `queue` variable to an "
+                "existing queue, then restart the worker.",
+                queue,
+                self._work_pool_name,
+                queue,
+            )
+            await self.__aexit__(None, None, None)
+            raise SystemExit(1)
+
+        return self
 
     async def __aexit__(self, *exc_info: object):
         """Stops the Armada observer when the worker shuts down."""
