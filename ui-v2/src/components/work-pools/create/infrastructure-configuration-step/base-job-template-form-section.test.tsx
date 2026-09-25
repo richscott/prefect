@@ -1,4 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "@/mocks/mock-json-input";
 import { BaseJobTemplateFormSection } from "./base-job-template-form-section";
@@ -33,6 +35,54 @@ const mockBaseJobTemplate: WorkerBaseJobTemplate = {
 };
 
 describe("BaseJobTemplateFormSection", () => {
+	it("keeps JSON defaults when switching back and editing another field", async () => {
+		function ControlledTemplate() {
+			const [template, setTemplate] = useState(mockBaseJobTemplate);
+			return (
+				<BaseJobTemplateFormSection
+					baseJobTemplate={template}
+					onBaseJobTemplateChange={(value) => {
+						setTemplate(value);
+						mockOnBaseJobTemplateChange(value);
+					}}
+				/>
+			);
+		}
+		const user = userEvent.setup();
+		render(<ControlledTemplate />);
+		await user.click(screen.getByRole("tab", { name: "Advanced" }));
+		const updated: WorkerBaseJobTemplate = {
+			...mockBaseJobTemplate,
+			variables: {
+				type: "object",
+				properties: {
+					cpu: { type: "number", title: "CPU", default: 2 },
+					memory: { type: "string", title: "Memory", default: "2Gi" },
+				},
+			},
+		};
+		fireEvent.change(await screen.findByTestId("mock-json-input"), {
+			target: { value: JSON.stringify(updated) },
+		});
+		await user.click(screen.getByRole("tab", { name: "Defaults" }));
+		expect(await screen.findByRole("spinbutton")).toHaveValue(2);
+		fireEvent.change(screen.getByDisplayValue("2Gi"), {
+			target: { value: "3Gi" },
+		});
+		await waitFor(() =>
+			expect(mockOnBaseJobTemplateChange).toHaveBeenLastCalledWith({
+				...mockBaseJobTemplate,
+				variables: {
+					type: "object",
+					properties: {
+						cpu: { type: "number", title: "CPU", default: 2 },
+						memory: { type: "string", title: "Memory", default: "3Gi" },
+					},
+				},
+			}),
+		);
+	});
+
 	beforeEach(() => {
 		mockOnBaseJobTemplateChange.mockClear();
 	});

@@ -1907,6 +1907,8 @@ class TestWorkerProperties:
         assert WorkerImplNoCustomization.get_documentation_url() == ""
         assert WorkerImplNoCustomization.get_description() == ""
         assert WorkerImplNoCustomization.get_display_name() == "test-no-customization"
+        assert WorkerImplNoCustomization._logo_resource is None
+        assert WorkerImplNoCustomization._is_beta is False
         assert WorkerImplNoCustomization.get_default_base_job_template() == {
             "job_configuration": {
                 "command": "{{ command }}",
@@ -1974,6 +1976,28 @@ class TestWorkerProperties:
                 pass
 
         assert WorkerImplWithLogoUrl.get_logo_url() == "https://example.com/logo.png"
+
+    def test_unreadable_logo_resource_falls_back_to_logo_url(self):
+        """A packaged logo is an enhancement; failing to read it is not an error."""
+
+        class WorkerImplWithMissingLogoResource(BaseWorker):
+            type = "test-with-missing-logo-resource"
+            job_configuration = BaseJobConfiguration
+
+            _logo_url = "https://example.com/logo.png"
+            _logo_resource = "frontend/logo.svg"
+
+            async def run(self):
+                pass
+
+            async def verify_submitted_deployment(self, deployment):
+                pass
+
+        # Defined in the test module, whose top-level package ships no such resource.
+        assert (
+            WorkerImplWithMissingLogoResource.get_logo_url()
+            == "https://example.com/logo.png"
+        )
 
     def test_custom_display_name(self):
         class WorkerImplWithDisplayName(BaseWorker):

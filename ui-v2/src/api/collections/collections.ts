@@ -22,6 +22,11 @@ export const queryKeyFactory = {
 export const buildListWorkPoolTypesQuery = () =>
 	queryOptions({
 		queryKey: queryKeyFactory.workPoolTypes(),
+		// Worker metadata only changes when an integration is installed or upgraded
+		// on the server, which requires a restart. The server caches this view for
+		// ten minutes, so matching that here avoids refetching on every window focus
+		// and keeps many work pool cards sharing a single request.
+		staleTime: 10 * 60_000,
 		queryFn: async () => {
 			const res = await (await getQueryService()).GET(
 				"/collections/views/{view}",

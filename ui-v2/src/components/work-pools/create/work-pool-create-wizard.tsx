@@ -1,11 +1,8 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useSuspenseQuery } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
-import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
-import { buildListWorkPoolTypesQuery } from "@/api/collections/collections";
 import { useCreateWorkPool, type WorkPoolCreate } from "@/api/work-pools";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -32,14 +29,11 @@ const workPoolCreateSchema = z.object({
 	...infrastructureConfigurationSchema.shape,
 });
 
-type WorkPoolCreateFormValues = z.infer<typeof workPoolCreateSchema>;
+export type WorkPoolCreateFormValues = z.infer<typeof workPoolCreateSchema>;
 
 export function WorkPoolCreateWizard() {
 	const router = useRouter();
 	const { createWorkPool, isPending } = useCreateWorkPool();
-	const { data: workersResponse = {} } = useSuspenseQuery(
-		buildListWorkPoolTypesQuery(),
-	);
 
 	// Stepper state management
 	const stepper = useStepper(STEPS.length);
@@ -54,36 +48,6 @@ export function WorkPoolCreateWizard() {
 	});
 
 	const workerType = form.watch("type");
-
-	useEffect(() => {
-		const workerInfo = Object.values(workersResponse).find(
-			(collection) =>
-				collection &&
-				typeof collection === "object" &&
-				Object.values(collection).find(
-					(workerInfo) =>
-						workerInfo &&
-						typeof workerInfo === "object" &&
-						"type" in workerInfo &&
-						(workerInfo as { type: string }).type === workerType,
-				),
-		) as Record<string, unknown> | undefined;
-		if (
-			workerInfo &&
-			workerType in workerInfo &&
-			typeof workerInfo[workerType] === "object" &&
-			workerInfo[workerType] &&
-			"default_base_job_configuration" in workerInfo[workerType]
-		) {
-			form.setValue(
-				"baseJobTemplate",
-				workerInfo[workerType].default_base_job_configuration as Record<
-					string,
-					unknown
-				>,
-			);
-		}
-	}, [workersResponse, form, workerType]);
 
 	const handleNext = async () => {
 		const fieldsToValidate = getFieldsForStep(stepper.currentStep);
@@ -163,7 +127,9 @@ export function WorkPoolCreateWizard() {
 			case 1:
 				return <InformationStep />;
 			case 2:
-				return <InfrastructureConfigurationStep />;
+				// Remounting per worker type keeps the schema form and the advanced
+				// JSON editor from carrying the previous type's values.
+				return <InfrastructureConfigurationStep key={workerType} />;
 			default:
 				return null;
 		}

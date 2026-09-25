@@ -124,6 +124,41 @@ ends when the flow run's job finishes. The observer can be disabled with
 other processes can be watched with
 `PREFECT_INTEGRATIONS_ARMADA_OBSERVER_JOB_SETS="my-queue/my-job-set"`.
 
+## How the work pool UI finds Armada
+
+Armada is not published to Prefect's collections registry, so the Prefect UI only
+knows about it because the package is installed next to the server. On startup the
+server loads every `prefect.collections` entry point, and `ArmadaWorker` supplies
+its own presentation to the work pool creation screen:
+
+```python
+class ArmadaWorker(BaseWorker[...]):
+    type: str = "armada"
+    _display_name = "Armada"
+    _description = "Execute flow runs within jobs scheduled on an Armada cluster..."
+    _documentation_url = "https://docs.prefect.io/integrations/prefect-armada"
+    _logo_url = "https://raw.githubusercontent.com/armadaproject/armada/master/logo.svg"
+    _logo_resource = "frontend/armada.svg"
+```
+
+`_logo_resource` names an image inside this package (see
+[`prefect_armada/frontend/`](prefect_armada/frontend/)), which the server reads and
+serves as a data URL, so the logo does not depend on an external host being
+reachable from the browser. `_logo_url` stays as the fallback if the packaged file
+cannot be read.
+
+The configuration fields on the work pool form come from `ArmadaWorkerVariables`
+and `ArmadaWorkerJobConfiguration`. There is no second copy of that schema: editing
+those Pydantic models is what changes the form.
+
+Because the entry point is loaded at import time, **installing or upgrading
+`prefect-armada` requires restarting the Prefect server** before its work pool type
+appears, and a browser reload to pick up the new metadata. The UI itself does not
+need rebuilding.
+
+See [Contribute to integrations](https://docs.prefect.io/contribute/contribute-integrations)
+for the general convention and its limits.
+
 ## Resources
 
 Refer to the [Prefect Armada docs](https://docs.prefect.io/integrations/prefect-armada)

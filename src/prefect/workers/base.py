@@ -108,6 +108,7 @@ from prefect.workers._cleanup import (
     WorkerCleanupHandlerRegistry,
 )
 from prefect.workers._cleanup_handlers import build_cleanup_handler_registry
+from prefect.workers._logo import load_packaged_logo
 from prefect.workers._worker_channel import WorkerChannel, WorkPoolWorkerChannel
 
 if TYPE_CHECKING:
@@ -619,8 +620,13 @@ class BaseWorker(abc.ABC, Generic[C, V, R]):
 
     _documentation_url = ""
     _logo_url = ""
+    # A logo shipped inside this worker's own Python package, as a relative POSIX
+    # path such as "frontend/armada.svg". Takes precedence over `_logo_url`, which
+    # remains the fallback when the resource cannot be read.
+    _logo_resource: str | None = None
     _description = ""
     _display_name = ""
+    _is_beta: bool = False
 
     def __init__(
         self,
@@ -727,6 +733,12 @@ class BaseWorker(abc.ABC, Generic[C, V, R]):
 
     @classmethod
     def get_logo_url(cls) -> str:
+        if cls._logo_resource:
+            packaged_logo = load_packaged_logo(
+                cls.__module__.split(".")[0], cls._logo_resource
+            )
+            if packaged_logo is not None:
+                return packaged_logo
         return cls._logo_url
 
     @classmethod

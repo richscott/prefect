@@ -48,7 +48,7 @@ def get_locally_installed_worker_metadata() -> Dict[str, Dict[str, Dict[str, Any
             "logo_url": worker_cls.get_logo_url(),
             "install_command": f"pip install {collection_name}",
             "default_base_job_configuration": worker_cls.get_default_base_job_template(),
-            "is_beta": False,
+            "is_beta": worker_cls._is_beta,
         }
 
     return metadata

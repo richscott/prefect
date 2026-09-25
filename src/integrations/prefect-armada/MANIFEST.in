@@ -7,3 +7,7 @@ global-exclude __pycache__/**
 # Top-level Config
 include LICENSE
 include MANIFEST.in
+
+# Package-owned frontend assets
+include prefect_armada/frontend/armada.svg
+include prefect_armada/frontend/ATTRIBUTION.md

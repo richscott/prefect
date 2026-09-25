@@ -148,6 +148,30 @@ class TestGetLocallyInstalledWorkerMetadata:
             == "pip install prefect-armada"
         )
 
+    @pytest.mark.parametrize("is_beta", [True, False])
+    def test_beta_state_comes_from_the_worker(self, monkeypatch, is_beta):
+        """The adapter reports the worker's own beta state, not a fixed value."""
+
+        # Worker classes register by `type`, so each parametrization needs its own.
+        worker_type = f"test-beta-state-{is_beta}".lower()
+
+        class BetaWorker(ProcessWorker):
+            type: str = worker_type
+            _is_beta = is_beta
+
+        BetaWorker.__module__ = "prefect_beta_integration.worker"
+
+        monkeypatch.setattr(
+            BaseWorker, "get_all_available_worker_types", lambda: [worker_type]
+        )
+        monkeypatch.setattr(
+            BaseWorker, "get_worker_class_from_type", lambda type: BetaWorker
+        )
+
+        metadata = get_locally_installed_worker_metadata()
+
+        assert metadata["prefect-beta-integration"][worker_type]["is_beta"] is is_beta
+
     def test_unregistered_worker_types_are_skipped(self, monkeypatch):
         monkeypatch.setattr(
             BaseWorker, "get_all_available_worker_types", lambda: ["gone"]

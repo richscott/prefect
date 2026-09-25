@@ -1,3 +1,4 @@
+import base64
 import uuid
 from unittest.mock import MagicMock
 
@@ -763,7 +764,11 @@ class TestWorkPoolTypeMetadata:
         assert "Armada" in ArmadaWorker.get_description()
 
     def test_logo_url(self):
-        assert ArmadaWorker.get_logo_url().endswith(".svg")
+        """The logo ships in the package, so it is served as an SVG data URL."""
+        logo_url = ArmadaWorker.get_logo_url()
+
+        assert logo_url.startswith("data:image/svg+xml;base64,")
+        assert base64.b64decode(logo_url.split(",", 1)[1]).lstrip().startswith(b"<?xml")
 
     def test_documentation_url(self):
         assert ArmadaWorker.get_documentation_url().startswith("https://")
