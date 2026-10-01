@@ -913,6 +913,7 @@ class ArmadaWorker(
     _display_name = "Armada"
     _documentation_url = "https://docs.prefect.io/integrations/prefect-armada"
     _logo_url = "https://raw.githubusercontent.com/armadaproject/armada/master/logo.svg"
+    _logo_resource = "frontend/armada.svg"
 
     async def _initiate_run(
         self,

@@ -68,3 +68,84 @@ To contribute to an existing integration, please follow these steps:
   </Step>
 </Steps>
 
+## Presenting a worker in the UI
+
+An integration that ships a worker supplies everything the work pool creation
+screen shows about it. Nothing in the UI holds a list of integrations, so a worker
+appears as soon as its package is installed alongside the server, including a
+worker from an integration that is not published to Prefect's collections registry.
+
+Presentation lives on the worker class:
+
+```python
+from prefect.workers.base import BaseWorker
+
+
+class MyWorker(BaseWorker):
+    type = "my-infrastructure"
+
+    _display_name = "My Infrastructure"
+    _description = "Execute flow runs on my infrastructure."
+    _documentation_url = "https://example.com/docs"
+    _logo_url = "https://example.com/logo.png"
+```
+
+The configuration fields on the form are generated from the worker's own
+`BaseJobConfiguration` and `BaseVariables` models, so field titles, descriptions,
+defaults and validation belong in those Pydantic models. There is no separate
+schema to maintain.
+
+### Shipping a logo inside the package
+
+`_logo_url` requires the image to be reachable from the user's browser. An
+integration can instead carry its logo in its own package and name it with
+`_logo_resource`:
+
+```python
+class MyWorker(BaseWorker):
+    ...
+    _logo_url = "https://example.com/logo.png"  # fallback
+    _logo_resource = "frontend/logo.svg"
+```
+
+The path is relative to the worker's top-level Python package and must be a `.svg`
+or `.png` file of at most 64 KiB. The server reads it and serves it as a base64
+data URL through the existing `logo_url` metadata field, so no new endpoint or
+response shape is involved. If the resource cannot be read, `_logo_url` is used
+instead and the rest of the worker's metadata is unaffected.
+
+Declare the asset so it ships in built distributions, or it will be missing from
+the installed package even though it works from a source checkout:
+
+```toml
+# pyproject.toml
+[tool.setuptools.package-data]
+my_integration = ["frontend/logo.svg"]
+```
+
+```
+# MANIFEST.in
+include my_integration/frontend/logo.svg
+```
+
+Verify with `uv build` and inspect both the wheel and the sdist for the file.
+
+<Note>
+  These attributes are private and this convention is not a stable extension API.
+  Only schema-driven presentation is supported. An integration cannot contribute
+  React components, routes, or any other executable frontend code.
+</Note>
+
+### What this does not cover
+
+- **The server needs the integration installed**, not just the worker machine. A
+  worker running elsewhere does not make its type appear in the UI.
+- **A restart is required.** Entry points are loaded at import time, so installing
+  or upgrading an integration needs a server restart and a browser reload. The UI
+  does not need rebuilding.
+- **Published records win.** Where the collections registry already publishes a
+  worker type, the published record takes precedence over the installed one, so
+  local changes to a published integration may not appear.
+- Logos are embedded in every `aggregate-worker-metadata` response and in the
+  server's cached copy of it, which is why the size cap exists.
+

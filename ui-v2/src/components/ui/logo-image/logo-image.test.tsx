@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { LogoImage } from "./logo-image";
 
@@ -58,5 +58,54 @@ describe("LogoImage", () => {
 
 		const image = screen.getByRole("img");
 		expect(image).toHaveClass("custom-class");
+	});
+
+	it("falls back when the image fails to load", () => {
+		render(<LogoImage url="https://example.com/missing.png" alt="Test Logo" />);
+
+		fireEvent.error(screen.getByRole("img"));
+
+		expect(screen.getByText("T")).toBeInTheDocument();
+		expect(screen.queryByRole("img")).not.toBeInTheDocument();
+	});
+
+	it("retries when the url changes after a failure", () => {
+		const { rerender } = render(
+			<LogoImage url="https://example.com/missing.png" alt="Test Logo" />,
+		);
+
+		fireEvent.error(screen.getByRole("img"));
+		expect(screen.queryByRole("img")).not.toBeInTheDocument();
+
+		rerender(
+			<LogoImage url="https://example.com/present.png" alt="Test Logo" />,
+		);
+
+		expect(screen.getByRole("img")).toHaveAttribute(
+			"src",
+			"https://example.com/present.png",
+		);
+	});
+
+	it("renders a data url like any other image source", () => {
+		const dataUrl = "data:image/svg+xml;base64,PHN2Zy8+";
+		render(<LogoImage url={dataUrl} alt="Packaged Logo" />);
+
+		expect(screen.getByRole("img")).toHaveAttribute("src", dataUrl);
+	});
+
+	it("keeps alt and size updates working after an error", () => {
+		const { rerender } = render(
+			<LogoImage url="https://example.com/a.png" alt="Alpha" size="sm" />,
+		);
+		fireEvent.error(screen.getByRole("img"));
+		expect(screen.getByText("A")).toBeInTheDocument();
+
+		rerender(
+			<LogoImage url="https://example.com/a.png" alt="Beta" size="lg" />,
+		);
+
+		const fallback = screen.getByText("B");
+		expect(fallback).toHaveClass("h-12", "w-12");
 	});
 });
