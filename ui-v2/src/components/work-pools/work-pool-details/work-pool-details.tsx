@@ -1,13 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
+import { buildListWorkPoolTypesQuery } from "@/api/collections/collections";
 import type { WorkPool } from "@/api/work-pools";
 import { buildListWorkPoolWorkersQuery } from "@/api/work-pools";
 import type { SchemaProperty } from "@/components/schemas/schema-display";
 import { FormattedDate } from "@/components/ui/formatted-date";
 import { Separator } from "@/components/ui/separator";
 import { WorkPoolStatusBadge } from "@/components/work-pools/work-pool-status-badge";
-import { cn, titleCase } from "@/utils";
+import {
+	parseWorkerMetadata,
+	workerDisplayName,
+} from "@/components/work-pools/worker-metadata";
+import { cn } from "@/utils";
 
 type WorkPoolDetailsProps = {
 	workPool: WorkPool;
@@ -32,6 +37,14 @@ const FieldValue = ({
 function BasicInfoSection({ workPool }: { workPool: WorkPool }) {
 	const { data: workers = [], isLoading } = useQuery(
 		buildListWorkPoolWorkersQuery(workPool.name),
+	);
+
+	// Non-suspending: the page stays usable if worker metadata is unavailable,
+	// falling back to a title-cased form of the pool's raw type.
+	const { data: workerTypes } = useQuery(buildListWorkPoolTypesQuery());
+	const typeLabel = useMemo(
+		() => workerDisplayName(workPool.type, parseWorkerMetadata(workerTypes)),
+		[workPool.type, workerTypes],
 	);
 
 	const lastPolled = useMemo(() => {
@@ -65,11 +78,7 @@ function BasicInfoSection({ workPool }: { workPool: WorkPool }) {
 		{
 			field: "Type",
 			ComponentValue: () =>
-				workPool.type ? (
-					<FieldValue>{titleCase(workPool.type)}</FieldValue>
-				) : (
-					<None />
-				),
+				workPool.type ? <FieldValue>{typeLabel}</FieldValue> : <None />,
 		},
 		{
 			field: "Concurrency Limit",

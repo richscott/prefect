@@ -1,48 +1,32 @@
+import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
+import { buildListWorkPoolTypesQuery } from "@/api/collections/collections";
 import type { WorkPool } from "@/api/work-pools";
 import { Badge } from "@/components/ui/badge";
-import { Icon, type IconId } from "@/components/ui/icons";
+import { Icon } from "@/components/ui/icons";
+import {
+	parseWorkerMetadata,
+	workerDisplayName,
+} from "@/components/work-pools/worker-metadata";
 
 type WorkPoolTypeBadgeProps = {
 	type: WorkPool["type"];
 };
 
-const WORK_POOL_TYPE_LABELS: Record<WorkPool["type"], string> = {
-	process: "Process",
-	ecs: "ECS",
-	"azure-container-instance": "Azure Container Instance",
-	docker: "Docker",
-	"cloud-run": "Cloud Run",
-	"cloud-run-v2": "Cloud Run v2",
-	"vertex-ai": "Vertex AI",
-	kubernetes: "Kubernetes",
-	armada: "Armada",
-} as const;
-
-const WORK_POOL_TYPE_ICONS: Record<WorkPool["type"], IconId> = {
-	process: "Cpu",
-	ecs: "Cpu",
-	"azure-container-instance": "Cpu",
-	docker: "Cpu",
-	"cloud-run": "Cpu",
-	"cloud-run-v2": "Cpu",
-	"vertex-ai": "Cpu",
-	kubernetes: "Cpu",
-	armada: "Cpu",
-} as const;
-
-const getWorkPoolTypeLabel = (type: WorkPool["type"]) => {
-	return WORK_POOL_TYPE_LABELS[type] ?? type;
-};
-
-const getWorkPoolTypeIcon = (type: WorkPool["type"]) => {
-	return WORK_POOL_TYPE_ICONS[type] ?? "Cpu";
-};
-
 export const WorkPoolTypeBadge = ({ type }: WorkPoolTypeBadgeProps) => {
+	// Non-suspending: a work pool list must stay readable while worker metadata
+	// is loading, and remain usable if it never arrives. Every badge on the page
+	// shares this one query.
+	const { data } = useQuery(buildListWorkPoolTypesQuery());
+	const label = useMemo(
+		() => workerDisplayName(type, parseWorkerMetadata(data)),
+		[type, data],
+	);
+
 	return (
 		<Badge>
-			<Icon id={getWorkPoolTypeIcon(type)} />
-			{getWorkPoolTypeLabel(type)}
+			<Icon id="Cpu" />
+			{label}
 		</Badge>
 	);
 };

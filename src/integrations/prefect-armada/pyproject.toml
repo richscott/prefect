@@ -66,6 +66,9 @@ git_describe_command = 'git describe --dirty --tags --long --match "prefect-arma
 [tool.setuptools]
 packages = ["prefect_armada"]
 
+[tool.setuptools.package-data]
+prefect_armada = ["frontend/armada.svg", "frontend/ATTRIBUTION.md"]
+
 [tool.interrogate]
 ignore-init-module = true
 ignore_init_method = true

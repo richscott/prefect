@@ -12,64 +12,42 @@ import {
 } from "@/components/ui/form";
 import { LogoImage } from "@/components/ui/logo-image";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { titleCase } from "@/utils";
+import {
+	parseWorkerMetadata,
+	workerDisplayName,
+} from "@/components/work-pools/worker-metadata";
+import type { WorkPoolCreateFormValues } from "../work-pool-create-wizard";
 
 type WorkPoolTypeSelectOption = {
 	label: string;
 	value: string;
 	logoUrl: string | null;
 	description: string | null;
-	documentationUrl?: string;
 	isBeta: boolean;
 };
 
 export function InfrastructureTypeStep() {
-	const form = useFormContext();
-	const { data: workersResponse = {} } = useSuspenseQuery(
+	const form = useFormContext<WorkPoolCreateFormValues>();
+	const { data: workersResponse } = useSuspenseQuery(
 		buildListWorkPoolTypesQuery(),
 	);
 
+	const workers = useMemo(
+		() => parseWorkerMetadata(workersResponse),
+		[workersResponse],
+	);
+
 	const options = useMemo<WorkPoolTypeSelectOption[]>(() => {
-		const options: WorkPoolTypeSelectOption[] = [];
-
-		// Transform the workers response to options array
-		Object.values(workersResponse).forEach((collection) => {
-			if (collection && typeof collection === "object") {
-				Object.values(collection).forEach((worker) => {
-					if (worker && typeof worker === "object" && "type" in worker) {
-						const {
-							type,
-							display_name: displayName,
-							description,
-							logo_url: logoUrl,
-							documentation_url: documentationUrl,
-							is_beta: isBeta,
-						} = worker as {
-							type?: string;
-							display_name?: string;
-							description?: string;
-							logo_url?: string;
-							documentation_url?: string;
-							is_beta?: boolean;
-						};
-
-						// Only the type is required: a worker installed from a collection
-						// the registry does not publish may have no logo or description,
-						// and dropping it here would hide a usable work pool type.
-						if (type) {
-							options.push({
-								label: displayName || titleCase(type),
-								value: type,
-								logoUrl: logoUrl || null,
-								description: description || null,
-								documentationUrl,
-								isBeta: isBeta || false,
-							});
-						}
-					}
-				});
-			}
-		});
+		const options = [...workers.values()].map((worker) => ({
+			label: workerDisplayName(worker.type, workers),
+			value: worker.type,
+			// Only the type is required. A worker from a collection the registry does
+			// not publish may carry no logo or description, and dropping it here
+			// would hide a usable work pool type.
+			logoUrl: worker.logo_url ?? null,
+			description: worker.description ?? null,
+			isBeta: worker.is_beta,
+		}));
 
 		// Sort options: non-beta first, then alphabetically by label
 		return options.sort((firstOption, secondOption) => {
@@ -81,7 +59,7 @@ export function InfrastructureTypeStep() {
 			}
 			return firstOption.label.localeCompare(secondOption.label);
 		});
-	}, [workersResponse]);
+	}, [workers]);
 
 	return (
 		<FormField
@@ -94,8 +72,27 @@ export function InfrastructureTypeStep() {
 					</FormLabel>
 					<FormControl>
 						<RadioGroup
-							value={field.value as string}
-							onValueChange={(value: string) => field.onChange(value)}
+							// An empty string keeps the group controlled before a selection.
+							value={field.value ?? ""}
+							onValueChange={(value: string) => {
+								const worker = workers.get(value);
+								// Selecting the same type again must not discard edits the
+								// user has already made to its configuration.
+								if (!worker || value === field.value) {
+									return;
+								}
+
+								field.onChange(value);
+								// The chosen worker's own defaults become the template, so
+								// the previous worker's values never survive a switch.
+								// Cloning keeps the cached query response immutable.
+								form.setValue(
+									"baseJobTemplate",
+									structuredClone(worker.default_base_job_configuration ?? {}),
+									{ shouldDirty: false, shouldTouch: false },
+								);
+								form.clearErrors("baseJobTemplate");
+							}}
 							className="space-y-3"
 						>
 							{options.map(({ label, value, logoUrl, description, isBeta }) => (

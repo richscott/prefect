@@ -1,4 +1,5 @@
 import type React from "react";
+import { useState } from "react";
 import { cn } from "@/utils";
 
 type LogoImageProps = {
@@ -14,24 +15,34 @@ const sizeClasses = {
 	lg: "h-12 w-12",
 };
 
-export const LogoImage: React.FC<LogoImageProps> = ({
+type LogoFallbackProps = Omit<LogoImageProps, "url">;
+
+const LogoFallback = ({ alt, size = "md", className }: LogoFallbackProps) => (
+	<div
+		className={cn(
+			"rounded border bg-muted flex items-center justify-center text-muted-foreground text-xs",
+			sizeClasses[size],
+			className,
+		)}
+	>
+		{alt.charAt(0).toUpperCase()}
+	</div>
+);
+
+/**
+ * Keyed by `url` from the outer component, so a new image gets a fresh attempt
+ * rather than inheriting the previous one's failure.
+ */
+const LogoImageWithFallback = ({
 	url,
 	alt,
 	size = "md",
 	className,
-}) => {
-	if (!url) {
-		return (
-			<div
-				className={cn(
-					"rounded border bg-muted flex items-center justify-center text-muted-foreground text-xs",
-					sizeClasses[size],
-					className,
-				)}
-			>
-				{alt.charAt(0).toUpperCase()}
-			</div>
-		);
+}: LogoImageProps & { url: string }) => {
+	const [hasError, setHasError] = useState(false);
+
+	if (hasError) {
+		return <LogoFallback alt={alt} size={size} className={className} />;
 	}
 
 	return (
@@ -43,17 +54,28 @@ export const LogoImage: React.FC<LogoImageProps> = ({
 				sizeClasses[size],
 				className,
 			)}
-			onError={(e) => {
-				const target = e.target as HTMLImageElement;
-				const fallback = document.createElement("div");
-				fallback.className = cn(
-					"rounded border bg-muted flex items-center justify-center text-muted-foreground text-xs",
-					sizeClasses[size],
-					className,
-				);
-				fallback.textContent = alt.charAt(0).toUpperCase();
-				target.parentNode?.replaceChild(fallback, target);
-			}}
+			onError={() => setHasError(true)}
+		/>
+	);
+};
+
+export const LogoImage: React.FC<LogoImageProps> = ({
+	url,
+	alt,
+	size = "md",
+	className,
+}) => {
+	if (!url) {
+		return <LogoFallback alt={alt} size={size} className={className} />;
+	}
+
+	return (
+		<LogoImageWithFallback
+			key={url}
+			url={url}
+			alt={alt}
+			size={size}
+			className={className}
 		/>
 	);
 };
