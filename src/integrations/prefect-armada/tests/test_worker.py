@@ -9,6 +9,7 @@ from armada_client.armada import submit_pb2
 from conftest import FakeRpcError, make_job_submit_response
 from prefect_armada import ArmadaWorker
 from prefect_armada.credentials import ArmadaClusterConfig, ArmadaCredentials
+from prefect_armada.exceptions import ArmadaObserverStartupError
 from prefect_armada.worker import ArmadaWorkerJobConfiguration
 from pydantic import ValidationError
 
@@ -26,6 +27,12 @@ def mock_observer(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("prefect_armada.worker.stop_observer", mocks.stop)
     monkeypatch.setattr("prefect_armada.worker.observe_job_set", mocks.observe)
     return mocks
+
+
+@pytest.fixture(autouse=True)
+def armada_client(mock_armada_client):
+    """Keeps the worker's startup queue check from dialing a real Armada server."""
+    return mock_armada_client
 
 
 @pytest.fixture
@@ -201,6 +208,43 @@ class TestArmadaWorkerJobConfiguration:
         } in env
         assert "resolves to the job's own pod" not in caplog.text
 
+    @pytest.mark.parametrize(
+        "api_url",
+        [
+            "http://localhost.example.com:4200/api",
+            "http://mylocalhost:4200/api",
+            "http://prefect.example.com:4200/localhost/api",
+            "http://10.127.0.0.1:4200/api",
+        ],
+    )
+    async def test_prepare_for_flow_run_leaves_a_url_merely_containing_a_local_host_alone(
+        self, default_configuration, flow_run, caplog, api_url
+    ):
+        default_configuration.api_dns_name = "172.18.0.1"
+        default_configuration.env = {"PREFECT_API_URL": api_url}
+
+        default_configuration.prepare_for_flow_run(flow_run)
+
+        env = default_configuration.job_manifest["podSpec"]["containers"][0]["env"]
+        assert {"name": "PREFECT_API_URL", "value": api_url} in env
+        assert "resolves to the job's own pod" not in caplog.text
+
+    async def test_prepare_for_flow_run_rewrites_only_the_host_of_a_local_api_url(
+        self, default_configuration, flow_run
+    ):
+        default_configuration.api_dns_name = "172.18.0.1"
+        default_configuration.env = {
+            "PREFECT_API_URL": "http://user:pass@localhost:4200/localhost/api?x=localhost"
+        }
+
+        default_configuration.prepare_for_flow_run(flow_run)
+
+        env = default_configuration.job_manifest["podSpec"]["containers"][0]["env"]
+        assert {
+            "name": "PREFECT_API_URL",
+            "value": "http://user:pass@172.18.0.1:4200/localhost/api?x=localhost",
+        } in env
+
     async def test_prepare_for_flow_run_warns_about_an_unreachable_api_url(
         self, default_configuration, flow_run, caplog
     ):
@@ -224,6 +268,68 @@ class TestArmadaWorkerJobConfiguration:
         )
 
         assert configuration.api_dns_name == "172.18.0.1"
+
+    def test_default_template_shows_the_default_queue(self):
+        template = ArmadaWorker.get_default_base_job_template()
+
+        assert template["variables"]["properties"]["queue"]["default"] == "prefect"
+        assert "queue" not in template["variables"].get("required", [])
+
+    def test_default_template_shows_the_queue_from_the_setting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("PREFECT_INTEGRATIONS_ARMADA_WORKER_DEFAULT_QUEUE", "batch")
+
+        template = ArmadaWorker.get_default_base_job_template()
+
+        assert template["variables"]["properties"]["queue"]["default"] == "batch"
+
+    async def test_queue_defaults_to_the_setting_when_the_template_is_created(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("PREFECT_INTEGRATIONS_ARMADA_WORKER_DEFAULT_QUEUE", "batch")
+
+        configuration = await ArmadaWorkerJobConfiguration.from_template_and_values(
+            ArmadaWorker.get_default_base_job_template(), {}
+        )
+
+        assert configuration.queue == "batch"
+
+    async def test_queue_from_the_work_pool_overrides_the_worker_setting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        template = ArmadaWorker.get_default_base_job_template()
+        monkeypatch.setenv("PREFECT_INTEGRATIONS_ARMADA_WORKER_DEFAULT_QUEUE", "batch")
+
+        configuration = await ArmadaWorkerJobConfiguration.from_template_and_values(
+            template, {}
+        )
+
+        assert configuration.queue == "prefect"
+
+    async def test_queue_from_the_work_pool_variables_overrides_the_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("PREFECT_INTEGRATIONS_ARMADA_WORKER_DEFAULT_QUEUE", "batch")
+
+        configuration = await ArmadaWorkerJobConfiguration.from_template_and_values(
+            ArmadaWorker.get_default_base_job_template(), {"queue": "analytics"}
+        )
+
+        assert configuration.queue == "analytics"
+
+    async def test_queue_falls_back_to_the_worker_setting_without_a_pool_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        template = ArmadaWorker.get_default_base_job_template()
+        del template["variables"]["properties"]["queue"]["default"]
+        monkeypatch.setenv("PREFECT_INTEGRATIONS_ARMADA_WORKER_DEFAULT_QUEUE", "batch")
+
+        configuration = await ArmadaWorkerJobConfiguration.from_template_and_values(
+            template, {}
+        )
+
+        assert configuration.queue == "batch"
 
     async def test_prepare_for_flow_run_slugifies_labels_and_annotations(
         self, default_configuration, flow_run
@@ -678,6 +784,88 @@ class TestArmadaWorker:
 
         mock_observer.start.assert_not_called()
         mock_observer.stop.assert_not_called()
+
+
+class TestQueueCheckOnStartup:
+    async def test_worker_starts_when_the_queue_exists(self, mock_armada_client):
+        async with ArmadaWorker(work_pool_name=f"test-{uuid.uuid4()}") as worker:
+            assert worker.is_setup
+
+        mock_armada_client.get_queue.assert_awaited_once_with(name="prefect")
+
+    async def test_worker_exits_when_the_queue_does_not_exist(
+        self, mock_armada_client, mock_observer, caplog
+    ):
+        mock_armada_client.get_queue.side_effect = FakeRpcError(
+            grpc.StatusCode.NOT_FOUND, "could not find queue"
+        )
+        worker = ArmadaWorker(work_pool_name=f"test-{uuid.uuid4()}")
+
+        with pytest.raises(SystemExit) as exc_info:
+            async with worker:
+                pytest.fail("The worker should not start without its queue")
+
+        assert exc_info.value.code == 1
+        assert "Armada queue 'prefect'" in caplog.text
+        assert "does not exist" in caplog.text
+        assert not worker.is_setup
+        mock_observer.stop.assert_called_once()
+
+    async def test_worker_exits_when_the_observer_cannot_start(
+        self, mock_armada_client, mock_observer, caplog
+    ):
+        mock_observer.start.side_effect = ArmadaObserverStartupError(
+            "The Armada observer failed to start: bad credentials"
+        )
+        worker = ArmadaWorker(work_pool_name=f"test-{uuid.uuid4()}")
+
+        with pytest.raises(SystemExit) as exc_info:
+            async with worker:
+                pytest.fail("The worker should not start without its observer")
+
+        assert exc_info.value.code == 1
+        assert "The Armada observer failed to start: bad credentials" in caplog.text
+        assert "PREFECT_INTEGRATIONS_ARMADA_OBSERVER_ENABLED=false" in caplog.text
+        assert not worker.is_setup
+        mock_armada_client.get_queue.assert_not_awaited()
+
+    async def test_start_exits_when_the_queue_does_not_exist(self, mock_armada_client):
+        mock_armada_client.get_queue.side_effect = FakeRpcError(
+            grpc.StatusCode.NOT_FOUND, "could not find queue"
+        )
+        worker = ArmadaWorker(work_pool_name=f"test-{uuid.uuid4()}")
+
+        with pytest.raises(SystemExit) as exc_info:
+            await worker.start(run_once=True)
+
+        assert exc_info.value.code == 1
+
+    async def test_checks_the_queue_configured_on_the_work_pool(
+        self, mock_armada_client
+    ):
+        template = ArmadaWorker.get_default_base_job_template()
+        template["variables"]["properties"]["queue"]["default"] = "my-queue"
+
+        async with ArmadaWorker(
+            work_pool_name=f"test-{uuid.uuid4()}", base_job_template=template
+        ):
+            pass
+
+        mock_armada_client.get_queue.assert_awaited_once_with(name="my-queue")
+
+    @pytest.mark.parametrize(
+        "status_code",
+        [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.PERMISSION_DENIED],
+    )
+    async def test_worker_starts_when_the_queue_cannot_be_checked(
+        self, mock_armada_client, caplog, status_code
+    ):
+        mock_armada_client.get_queue.side_effect = FakeRpcError(status_code, "nope")
+
+        async with ArmadaWorker(work_pool_name=f"test-{uuid.uuid4()}") as worker:
+            assert worker.is_setup
+
+        assert "Unable to verify that Armada queue 'prefect' exists" in caplog.text
 
 
 class TestWorkPoolTypeMetadata:

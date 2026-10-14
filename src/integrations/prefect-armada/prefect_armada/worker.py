@@ -128,8 +128,10 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Literal,
+    Self,
     TypeVar,
 )
+from urllib.parse import urlsplit
 
 import anyio
 import anyio.abc
@@ -138,7 +140,6 @@ from armada_client.asyncio_client import ArmadaAsyncIOClient
 from jsonpatch import JsonPatch
 from pydantic import Field, field_validator, model_validator
 from tenacity import AsyncRetrying, stop_after_attempt, wait_fixed, wait_random
-from typing_extensions import Self
 
 import prefect
 from prefect.client.schemas.objects import Flow as APIFlow
@@ -156,7 +157,11 @@ from prefect.workers.base import (
     BaseWorkerResult,
 )
 from prefect_armada.credentials import ArmadaClusterConfig, ArmadaCredentials
-from prefect_armada.exceptions import rpc_details, rpc_status_code
+from prefect_armada.exceptions import (
+    ArmadaObserverStartupError,
+    rpc_details,
+    rpc_status_code,
+)
 from prefect_armada.observer import observe_job_set, start_observer, stop_observer
 from prefect_armada.settings import ArmadaSettings
 from prefect_armada.utilities import (
@@ -185,6 +190,9 @@ EXTERNAL_JOB_URI_FIELD = "externalJobUri"
 # the loopback names resolve to the pod itself, and `0.0.0.0` is only an address
 # to bind to, not one to connect to.
 _LOCAL_API_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0")
+
+# How long the worker waits on Armada when checking its queue exists at startup.
+_QUEUE_CHECK_TIMEOUT_SECONDS = 30
 
 logger: logging.Logger = get_logger("prefect_armada.worker")
 
@@ -246,6 +254,20 @@ class ArmadaImagePullPolicy(enum.Enum):
     NEVER = "Never"
 
 
+def _get_default_queue() -> str:
+    """Returns the Armada queue used when a work pool does not specify one."""
+    return ArmadaSettings().worker.default_queue
+
+
+def _add_default_queue_to_schema(schema: dict[str, Any]) -> None:
+    """Publishes the default queue in the `queue` variable's schema.
+
+    Pydantic leaves a `default_factory` out of the JSON schema, which would
+    leave a work pool's defaults showing no queue at all.
+    """
+    schema["default"] = _get_default_queue()
+
+
 class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
     """
     Configuration class used by the Armada worker.
@@ -274,10 +296,6 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
             cluster, substituted for a local address in jobs' `PREFECT_API_URL`.
         cluster_config: The Armada cluster configuration to connect with.
         credentials: The Armada credentials to authenticate with.
-        job_watch_timeout_seconds: The number of seconds to wait for the job to
-            complete before timing out. If `None`, the observer will watch the
-            job indefinitely.
-        stream_output: Whether or not to stream the job's output.
     """
 
     annotations: dict[str, str] = Field(
@@ -287,7 +305,7 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
             "this job configuration."
         ),
     )
-    queue: str = Field(default="prefect")
+    queue: str = Field(default_factory=_get_default_queue)
     job_set_id: str | None = Field(default=None)
     namespace: str = Field(default="default")
     job_manifest: dict[str, Any] = Field(
@@ -300,8 +318,6 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
     api_dns_name: str | None = Field(default=None)
     cluster_config: ArmadaClusterConfig | None = Field(default=None)
     credentials: ArmadaCredentials | None = Field(default=None)
-    job_watch_timeout_seconds: int | None = Field(default=None)
-    stream_output: bool = Field(default=True)
 
     env: dict[str, str | None] | list[dict[str, Any]] = Field(default_factory=dict)
 
@@ -601,7 +617,12 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
         Warns when a local URL is about to be handed to a job with no
         `api_dns_name` to replace it, since the job cannot reach it.
         """
-        if not any(host in api_url for host in _LOCAL_API_HOSTS):
+        try:
+            parsed = urlsplit(api_url)
+        except ValueError:
+            return None
+
+        if parsed.hostname not in _LOCAL_API_HOSTS:
             return None
 
         if not self.api_dns_name:
@@ -616,9 +637,11 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
             )
             return None
 
-        for host in _LOCAL_API_HOSTS:
-            api_url = api_url.replace(host, self.api_dns_name)
-        return api_url
+        # Swap only the host, keeping any credentials and port around it
+        userinfo, at, host_and_port = parsed.netloc.rpartition("@")
+        _, colon, port = host_and_port.partition(":")
+        netloc = f"{userinfo}{at}{self.api_dns_name}{colon}{port}"
+        return parsed._replace(netloc=netloc).geturl()
 
     def _slugify_labels(self):
         """Slugifies the labels in the job manifest."""
@@ -789,10 +812,17 @@ class ArmadaWorkerVariables(BaseVariables):
         default_factory=dict,
         description="Annotations applied to Armada jobs created by the worker.",
     )
+    # The setting is resolved into the schema as well as the model, so a work
+    # pool's defaults show the queue its jobs go to and every worker polling
+    # the pool submits to that queue, whatever its own setting says.
     queue: str = Field(
-        default="prefect",
+        default_factory=_get_default_queue,
         description="The Armada queue to submit jobs to. The queue must already "
-        "exist and the worker's credentials must be permitted to submit to it.",
+        "exist and the worker's credentials must be permitted to submit to it. "
+        "A new work pool defaults to the "
+        "`PREFECT_INTEGRATIONS_ARMADA_WORKER_DEFAULT_QUEUE` setting of the "
+        "process that creates it, which defaults to `prefect`.",
+        json_schema_extra=_add_default_queue_to_schema,
     )
     job_set_id: str | None = Field(
         default=None,
@@ -823,19 +853,6 @@ class ArmadaWorkerVariables(BaseVariables):
     image_pull_policy: Literal["IfNotPresent", "Always", "Never"] = Field(
         default=ArmadaImagePullPolicy.IF_NOT_PRESENT,
         description="The Kubernetes image pull policy to use for job containers.",
-    )
-    job_watch_timeout_seconds: int | None = Field(
-        default=None,
-        description=(
-            "Number of seconds to wait for each event emitted by a job before "
-            "timing out. If not set, the observer will watch each job indefinitely."
-        ),
-    )
-    stream_output: bool = Field(
-        default=True,
-        description=(
-            "If set, output will be streamed from the job to local standard output."
-        ),
     )
     cluster_config: ArmadaClusterConfig | None = Field(
         default=None,
@@ -1128,11 +1145,102 @@ class ArmadaWorker(
 
         return None
 
+    async def _get_missing_queue(self) -> str | None:
+        """Checks that the work pool's Armada queue exists.
+
+        A missing queue otherwise goes unnoticed until a flow run is submitted,
+        and the flow run sits in `Late` until then. Only the queue set on the
+        work pool is checked; a deployment overriding `queue` is checked when
+        its flow runs are submitted.
+
+        Returns:
+            The queue's name if Armada reports that it does not exist, or `None`
+            otherwise, including when the check could not be completed.
+        """
+        if self._work_pool is None:
+            self._logger.debug(
+                "Work pool is not yet known; skipping the Armada queue check."
+            )
+            return None
+
+        try:
+            configuration = await self.job_configuration.from_template_and_values(
+                base_job_template=self._work_pool.base_job_template,
+                values={},
+                client=self._client,
+            )
+        except Exception as exc:
+            self._logger.warning(
+                "Unable to read the work pool's job configuration; skipping the "
+                "Armada queue check: %s",
+                exc,
+            )
+            return None
+
+        queue = configuration.queue
+        try:
+            with anyio.fail_after(_QUEUE_CHECK_TIMEOUT_SECONDS):
+                async with self._get_configured_armada_client(configuration) as client:
+                    await client.get_queue(name=queue)
+        except grpc.RpcError as exc:
+            if rpc_status_code(exc) is grpc.StatusCode.NOT_FOUND:
+                return queue
+            message = rpc_details(exc) or str(exc)
+            if hint := self._get_armada_error_hint(exc, queue):
+                message += f". Hint: {hint}"
+            self._logger.warning(
+                "Unable to verify that Armada queue %r exists: %s", queue, message
+            )
+        except TimeoutError:
+            self._logger.warning(
+                "Timed out after %s seconds verifying that Armada queue %r exists.",
+                _QUEUE_CHECK_TIMEOUT_SECONDS,
+                queue,
+            )
+        return None
+
     async def __aenter__(self):
-        """Starts the Armada observer alongside the worker."""
+        """Starts the Armada observer alongside the worker.
+
+        Exits the process if the observer cannot be started, since jobs that
+        fail before their flow run starts would be left pending, or if the work
+        pool's Armada queue does not exist, since every flow run the worker
+        submits would be rejected.
+        """
         if ArmadaSettings().observer.enabled:
-            start_observer()
-        return await super().__aenter__()
+            try:
+                start_observer()
+            except ArmadaObserverStartupError as exc:
+                self._logger.error(
+                    "%s. Without the observer, Armada jobs that fail before "
+                    "their flow run starts would never be marked as crashed. "
+                    "Fix the error and restart the worker, or set "
+                    "`PREFECT_INTEGRATIONS_ARMADA_OBSERVER_ENABLED=false` to "
+                    "run without the observer.",
+                    exc,
+                )
+                raise SystemExit(1)
+        try:
+            await super().__aenter__()
+        except BaseException:
+            if ArmadaSettings().observer.enabled:
+                stop_observer()
+            raise
+
+        if queue := await self._get_missing_queue():
+            self._logger.error(
+                "Armada queue %r, configured for work pool %r, does not exist. "
+                "Create the queue in Armada (for example, `armadactl create "
+                "queue %s`) or set the work pool's `queue` variable to an "
+                "existing queue, then restart the worker.",
+                queue,
+                self._work_pool_name,
+                queue,
+            )
+            await self.__aexit__(None, None, None)
+            raise SystemExit(1)
+
+        return self
 
     async def __aexit__(self, *exc_info: object):
         """Stops the Armada observer when the worker shuts down."""
