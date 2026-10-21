@@ -17,6 +17,16 @@ type BaseJobTemplateFormSectionProps = {
 	onBaseJobTemplateChange: (value: WorkerBaseJobTemplate) => void;
 };
 
+function getDefaultValues(schema?: PrefectSchemaObject): SchemaFormValues {
+	const defaults: SchemaFormValues = {};
+	for (const [key, property] of Object.entries(schema?.properties ?? {})) {
+		if (property && typeof property === "object" && "default" in property) {
+			defaults[key] = property.default;
+		}
+	}
+	return defaults;
+}
+
 export function BaseJobTemplateFormSection({
 	baseJobTemplate,
 	onBaseJobTemplateChange,
@@ -37,18 +47,10 @@ export function BaseJobTemplateFormSection({
 		);
 	}, [variablesSchema?.properties]);
 
-	// Get default values from schema properties
-	const defaultValues = useMemo<SchemaFormValues>(() => {
-		if (!variablesSchema?.properties) return {};
-
-		const defaults: SchemaFormValues = {};
-		Object.entries(variablesSchema.properties).forEach(([key, property]) => {
-			if (property && typeof property === "object" && "default" in property) {
-				defaults[key] = property.default;
-			}
-		});
-		return defaults;
-	}, [variablesSchema?.properties]);
+	const defaultValues = useMemo(
+		() => getDefaultValues(variablesSchema),
+		[variablesSchema],
+	);
 
 	const [schemaValues, setSchemaValues] = useSchemaFormValues(defaultValues);
 	const [schemaErrors] = useSchemaFormErrors([]);
@@ -98,12 +100,13 @@ export function BaseJobTemplateFormSection({
 
 			try {
 				const parsed = JSON.parse(value) as WorkerBaseJobTemplate;
+				setSchemaValues(getDefaultValues(parsed.variables));
 				onBaseJobTemplateChange(parsed);
 			} catch (error) {
 				setJsonError(error instanceof Error ? error.message : "Invalid JSON");
 			}
 		},
-		[onBaseJobTemplateChange],
+		[onBaseJobTemplateChange, setSchemaValues],
 	);
 
 	return (
